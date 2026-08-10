@@ -37,8 +37,10 @@ Electronベースのアーキテクチャにより、同一コードベースで
 
 ## 配布・インストール要件
 
-- **NFR-C-006**: システムはWindowsではNSISインストーラーとインストール不要のportable版（いずれもx64/arm64）、macOSではDMG/zipとして配布しなければならない（Windowsの配布形態拡充は [US-018](../stories/US-018.md) を参照）
-- **NFR-C-007**: システムはElectron Updateを使って自動アップデートをサポートしなければならない
+- **NFR-C-006**: システムはWindowsではMicrosoft Store経由のMSIX/AppX（x64/arm64）、macOSではDMG/zipとして配布しなければならない。WindowsのStore配布への移行と`.exe`配布の廃止は [US-019](../stories/US-019.md)、その前身のNSIS/portable配布は [US-018](../stories/US-018.md) を参照
+- **NFR-C-007**: 自動アップデートの提供方針はプラットフォームごとに異なる
+  - **Windows（必須・充足済み）**: Microsoft Storeが更新を管理する。electron-builderのAppXターゲットは`electron-updater`による自動更新に対応しないため、Store側の更新機構に委ねる（[US-019](../stories/US-019.md)）。アプリ側の実装は不要である
+  - **macOS（将来要件・Phase 2対象）**: `electron-updater`（Squirrel.Mac）による自動更新を導入する。現時点で未実装であり、**現行リリースの受入要件には含めない**。対応時期はmacOSを正式対応とするPhase 2（[NFR-C-002](#nfr-c-001002-os対応)）とする
 - **NFR-C-008**: エンドユーザーはNode.js・Python・その他ランタイムを別途インストールすることなく、アプリを起動して全機能を使用できなければならない
 - **NFR-C-009**: アプリのインストーラーはElectronのバンドルNode.jsランタイムを含み、完全に自己完結したパッケージとして配布しなければならない
 - **NFR-C-010**: 運指提案を含む全機能は、外部プロセス・外部サービスへの依存なしにアプリ単体で動作しなければならない
