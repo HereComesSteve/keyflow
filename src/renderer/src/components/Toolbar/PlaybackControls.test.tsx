@@ -2,12 +2,24 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import * as Tone from 'tone';
-import { PlaybackControls } from './PlaybackControls';
+import {
+  PlaybackControls,
+  AUDIO_START_TIMEOUT_MS,
+  PLAY_REQUEST_TIMEOUT_MS,
+} from './PlaybackControls';
 import { usePracticeStore } from '../../store';
+
+// TASK-106: AudioContextが running にならない環境を再現できるよう、getContext().state を
+// テストから差し替え可能にする（既定は正常系の 'running'）。
+const mockToneContext: { state: AudioContextState } = { state: 'running' };
 
 vi.mock('tone', () => ({
   start: vi.fn().mockResolvedValue(undefined),
+  getContext: vi.fn(() => mockToneContext),
 }));
+
+// 型付きモック参照（`as unknown as Mock` のキャストを避ける）。
+const mockedToneStart = vi.mocked(Tone.start);
 
 describe('PlaybackControls', () => {
   const createAudioEngineMock = () => ({
@@ -18,10 +30,16 @@ describe('PlaybackControls', () => {
 
   beforeEach(() => {
     usePracticeStore.setState({ language: 'ja', playbackState: 'stopped', voiceLoading: false });
+    mockToneContext.state = 'running';
+    mockedToneStart.mockResolvedValue(undefined);
+    vi.spyOn(window, 'alert').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('renders play, pause, and stop buttons', () => {
@@ -201,6 +219,172 @@ describe('PlaybackControls', () => {
       render(<PlaybackControls audioEngine={audioEngine} />);
 
       expect(screen.getByTestId('playback-play')).not.toBeDisabled();
+    });
+  });
+
+  /**
+   * TASK-106: 再生開始経路の失敗を必ずユーザーへ提示する（再発防止）。
+   *
+   * 修正前は `Tone.start()` / `playAccompaniment()` の失敗や未決着が握り潰され、
+   * クリックしても画面上は一切変化しなかった。
+   * Win11 Portable版の「再生ボタンを押しても何も起きない」報告の直接原因である。
+   * docs/sdd/troubleshooting/2026-08-11-portable-play-no-response/analysis.md
+   */
+  describe('TASK-106: 再生開始失敗時のエラー通知', () => {
+    it('playAccompaniment()が失敗したらエラーダイアログを表示し、再生中にはしない', async () => {
+      const audioEngine = {
+        ...createAudioEngineMock(),
+        playAccompaniment: vi.fn().mockRejectedValue(new Error('boom')),
+      };
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+
+      await waitFor(() =>
+        expect(window.alert).toHaveBeenCalledWith(
+          expect.stringContaining('再生を開始できませんでした')
+        )
+      );
+      expect(usePracticeStore.getState().playbackState).toBe('stopped');
+    });
+
+    it('Tone.start()が失敗したらエラーダイアログを表示し、playAccompanimentを呼ばない', async () => {
+      mockedToneStart.mockRejectedValue(new Error('resume failed'));
+      const audioEngine = createAudioEngineMock();
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+
+      await waitFor(() => expect(window.alert).toHaveBeenCalledTimes(1));
+      expect(audioEngine.playAccompaniment).not.toHaveBeenCalled();
+      expect(usePracticeStore.getState().playbackState).toBe('stopped');
+    });
+
+    it('AudioContextがrunningにならない場合はエラーダイアログを表示する（音声デバイスを開けない環境）', async () => {
+      mockToneContext.state = 'suspended';
+      const audioEngine = createAudioEngineMock();
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+
+      await waitFor(() => expect(window.alert).toHaveBeenCalledTimes(1));
+      expect(audioEngine.playAccompaniment).not.toHaveBeenCalled();
+      expect(usePracticeStore.getState().playbackState).toBe('stopped');
+    });
+
+    it('Tone.start()が決着しない場合、上限時間の経過でエラーダイアログを表示する', async () => {
+      vi.useFakeTimers();
+      // 決着しないPromise（音声デバイスを開けないときのresume()の挙動）。
+      mockedToneStart.mockReturnValue(new Promise<void>(() => {}));
+      const audioEngine = createAudioEngineMock();
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AUDIO_START_TIMEOUT_MS + 1);
+      });
+
+      expect(window.alert).toHaveBeenCalledTimes(1);
+      expect(audioEngine.playAccompaniment).not.toHaveBeenCalled();
+      expect(usePracticeStore.getState().playbackState).toBe('stopped');
+    });
+
+    it('playAccompaniment()が決着しない場合、上限時間の経過でエラーダイアログを表示する', async () => {
+      vi.useFakeTimers();
+      const audioEngine = {
+        ...createAudioEngineMock(),
+        playAccompaniment: vi.fn().mockReturnValue(new Promise<void>(() => {})),
+      };
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PLAY_REQUEST_TIMEOUT_MS + 1);
+      });
+
+      expect(window.alert).toHaveBeenCalledTimes(1);
+      expect(usePracticeStore.getState().playbackState).toBe('stopped');
+    });
+
+    it('開始処理の実行中は再生ボタンを無効化し、連打しても要求は1件に制限される（CodeRabbit PR#77指摘）', async () => {
+      let resolvePlay: () => void = () => {};
+      const playPromise = new Promise<void>((resolve) => {
+        resolvePlay = resolve;
+      });
+      const audioEngine = {
+        ...createAudioEngineMock(),
+        playAccompaniment: vi.fn().mockReturnValue(playPromise),
+      };
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      const playButton = screen.getByTestId('playback-play');
+      fireEvent.click(playButton);
+
+      await waitFor(() => expect(playButton).toBeDisabled());
+
+      // 開始処理の完了前に連打しても、追加の要求は発行されない。
+      fireEvent.click(playButton);
+      fireEvent.keyDown(window, { code: 'Space' });
+
+      await act(async () => {
+        resolvePlay();
+        await playPromise;
+      });
+
+      expect(audioEngine.playAccompaniment).toHaveBeenCalledTimes(1);
+      expect(usePracticeStore.getState().playbackState).toBe('playing');
+    });
+
+    it('開始処理が失敗しても再生ボタンは再び押下可能になる', async () => {
+      mockedToneStart.mockRejectedValueOnce(new Error('resume failed'));
+      render(<PlaybackControls audioEngine={createAudioEngineMock()} />);
+
+      const playButton = screen.getByTestId('playback-play');
+      fireEvent.click(playButton);
+
+      await waitFor(() => expect(window.alert).toHaveBeenCalledTimes(1));
+      expect(playButton).not.toBeDisabled();
+    });
+
+    it('AudioContextがsuspendedへ戻ったら次の再生でTone.start()をやり直す（CodeRabbit PR#77指摘）', async () => {
+      const audioEngine = createAudioEngineMock();
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      const playButton = screen.getByTestId('playback-play');
+      fireEvent.click(playButton);
+      await waitFor(() => expect(usePracticeStore.getState().playbackState).toBe('playing'));
+      expect(mockedToneStart).toHaveBeenCalledTimes(1);
+
+      // 出力デバイスの切り替え等でAudioContextがsuspendedへ戻った状況を再現する。
+      // 再生ボタンの再有効化（playbackState='stopped'）は再描画を伴うためactで包む。
+      mockToneContext.state = 'suspended';
+      await act(async () => {
+        usePracticeStore.setState({ playbackState: 'stopped' });
+      });
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+
+      // 起動済みフラグだけで早期returnせず、再度Tone.start()を呼んで状態を検証する。
+      await waitFor(() => expect(mockedToneStart).toHaveBeenCalledTimes(2));
+      expect(window.alert).toHaveBeenCalledTimes(1);
+      expect(usePracticeStore.getState().playbackState).toBe('stopped');
+    });
+
+    it('失敗後にもう一度クリックすると Tone.start() からやり直す', async () => {
+      mockedToneStart.mockRejectedValueOnce(new Error('resume failed'));
+      const audioEngine = createAudioEngineMock();
+      render(<PlaybackControls audioEngine={audioEngine} />);
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+      await waitFor(() => expect(window.alert).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByTestId('playback-play'));
+
+      await waitFor(() => expect(audioEngine.playAccompaniment).toHaveBeenCalledTimes(1));
+      expect(Tone.start).toHaveBeenCalledTimes(2);
+      expect(usePracticeStore.getState().playbackState).toBe('playing');
     });
   });
 
