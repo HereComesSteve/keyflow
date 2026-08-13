@@ -103,7 +103,9 @@ describe('createLibraryRemoveHandler', () => {
   // M-2: 非文字列・空文字のpathでは削除しない（不正入力による予期しない削除を防ぐ）。
   it('非文字列/空文字のpathではremoveを呼ばない', async () => {
     const libraryService = createLibraryServiceMock();
-    const handler = createLibraryRemoveHandler(libraryService);
+    const handler = createLibraryRemoveHandler(libraryService, {
+      unlink: vi.fn().mockResolvedValue(undefined),
+    });
 
     await handler({} as never, '' as never);
     await handler({} as never, 42 as never);
