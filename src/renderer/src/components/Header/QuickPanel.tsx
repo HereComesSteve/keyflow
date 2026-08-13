@@ -3,7 +3,9 @@ import type { Score } from '../../types/score';
 import type { FingerAssignment } from '../../types/annotation';
 import { VolumeControl } from '../Toolbar/VolumeControl';
 import { ZoomControl } from '../Toolbar/ZoomControl';
+import { ScoreLayoutControl } from '../Toolbar/ScoreLayoutControl';
 import { FingeringToggle } from '../Toolbar/FingeringToggle';
+import { FingeringEditToggle } from '../Toolbar/FingeringEditToggle';
 import { FingeringPanel } from '../FingeringPanel';
 import { StatsDisplay } from '../StatsDisplay';
 import { MetronomeAccentToggle } from './MetronomeToggle';
@@ -16,6 +18,10 @@ export interface QuickPanelProps {
   onFingeringSuggested: (assignments: FingerAssignment[]) => void;
   /** アノテーション読み込み中など、運指提案ボタンを無効化したい場合にtrue。 */
   fingeringDisabled?: boolean;
+  /** 指法编辑模式是否开启（FingeringEditToggle 受控状态，App 持有）。 */
+  fingeringEditMode?: boolean;
+  /** 指法编辑模式切换回调。 */
+  onFingeringEditModeChange?: (checked: boolean) => void;
 }
 
 const SECTION_LABEL_STYLE: React.CSSProperties = {
@@ -52,6 +58,8 @@ export const QuickPanel: React.FC<QuickPanelProps> = ({
   score,
   onFingeringSuggested,
   fingeringDisabled,
+  fingeringEditMode,
+  onFingeringEditModeChange,
 }) => {
   const t = useTranslation();
 
@@ -64,11 +72,16 @@ export const QuickPanel: React.FC<QuickPanelProps> = ({
         <span style={SECTION_LABEL_STYLE}>{t.quickPanel.displaySection}</span>
         <VolumeControl />
         <ZoomControl />
+        <ScoreLayoutControl />
       </div>
 
       <div style={SECTION_STYLE}>
         <span style={SECTION_LABEL_STYLE}>{t.quickPanel.fingeringSection}</span>
         <FingeringToggle />
+        <FingeringEditToggle
+          checked={fingeringEditMode ?? false}
+          onChange={onFingeringEditModeChange ?? (() => {})}
+        />
         <FingeringPanel
           score={score}
           onSuggested={onFingeringSuggested}

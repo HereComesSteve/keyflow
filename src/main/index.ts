@@ -28,6 +28,12 @@ import { isAllowedPermission } from './permission-policy';
 import { resolveLanguage, type Language } from './locale';
 import { createSettingsSetHandler } from './settings-handlers';
 
+// Web Bluetooth: select-bluetooth-device イベントの callback を一時保留する。
+// renderer が bluetooth:select-device（選択）/ bluetooth:cancel-select（キャンセル）
+// IPCを送信するまで保持し、受け取り次第呼び出して requestDevice のPromiseを解決/拒否する。
+// ユーザー選択式のため自動選択は行わない。
+let pendingBluetoothCallback: ((deviceId: string) => void) | null = null;
+
 function createWindow(): void {
   // TASK-088: 実起動E2E（Playwright for Electron）実行時のみ環境変数KEYFLOW_E2E=1が
   // 渡される。preloadへ'--keyflow-e2e'引数を渡すことでE2E専用計装
@@ -66,6 +72,34 @@ function createWindow(): void {
     if (!isAllowedNavigationUrl(url, process.env['ELECTRON_RENDERER_URL'])) {
       event.preventDefault();
     }
+  });
+
+  // Web Bluetooth: navigator.bluetooth.requestDevice() 呼び出し時に発火する
+  // デバイス選択イベント。ハンドラ未登録だと全Bluetooth要求がキャンセルされるため
+  // 必ず登録する。
+  //
+  // 本イベントはスキャン中に複数回発火し、deviceList へデバイスが順次追加される。
+  // ここでは自動選択せず、発見デバイス一覧を renderer へ転送し、ユーザーが
+  // GloveControlPanel の一覧から選択するまで callback を保留する（ユーザー選択式）。
+  // ユーザー選択/キャンセルは bluetooth:select-device / bluetooth:cancel-select IPCで
+  // 受け取る（app.whenReady 内で登録）。空リストでも転送し「まだ見つからない」状態を
+  // 画面へ反映できるようにする。
+  mainWindow.webContents.on('select-bluetooth-device', (event, deviceList, callback) => {
+    event.preventDefault();
+    pendingBluetoothCallback = callback;
+
+    // 診断用: 発見されたデバイス名をターミナルへ出力（実機名確認用）
+    if (deviceList.length > 0) {
+      console.log(
+        '[bluetooth] discovered devices:',
+        deviceList.map((d) => `${d.deviceName}(${d.deviceId})`)
+      );
+    }
+
+    mainWindow.webContents.send(
+      'bluetooth:devices-updated',
+      deviceList.map((d) => ({ deviceId: d.deviceId, deviceName: d.deviceName }))
+    );
   });
 
   // HMR for renderer base on electron-vite cli.
@@ -122,6 +156,23 @@ app.whenReady().then(() => {
     createShowOpenDialogHandler(dialog, pathAllowlist, settingsService)
   );
 
+  // Web Bluetooth デバイス選択（renderer→main）: ユーザーがGloveControlPanelの
+  // 一覧から選択したデバイスIDを受け取り、保留中の select-bluetooth-device callbackへ
+  // 渡す。これにより requestDevice のPromiseが選択デバイスで解決する。
+  ipcMain.on('bluetooth:select-device', (_event, deviceId: string) => {
+    const cb = pendingBluetoothCallback;
+    pendingBluetoothCallback = null;
+    cb?.(deviceId);
+  });
+
+  // Web Bluetooth スキャンキャンセル（renderer→main）: 空文字をcallbackへ渡し、
+  // requestDevice を NotFoundError で reject させる（「キャンセル」扱い）。
+  ipcMain.on('bluetooth:cancel-select', () => {
+    const cb = pendingBluetoothCallback;
+    pendingBluetoothCallback = null;
+    cb?.('');
+  });
+
   // TASK-053: ドラッグ＆ドロップで開かれたファイルも file:write（アノテーション保存）の
   // allowlist に載せ、ファイル履歴（addRecentFile）に反映するための登録専用IPC。
   // 拡張子検証は createRegisterDroppedFileHandler 内で行う。
@@ -138,7 +189,8 @@ app.whenReady().then(() => {
   // アノテーションのサイドカーファイル（*.annotation.json）のように「存在しないのが
   // 正常」なファイル用。ENOENTはエラーではなくnullを返す（file:readをそのまま使うと
   // 初回オープンのたびにメインプロセスへ未処理エラーがログされるため。2026-07-05）。
-  ipcMain.handle('file:read-if-exists', createReadFileIfExistsHandler(pathAllowlist, fs.promises));
+  // 诊断 handler 在下方注册，这里先不注册原 handler
+  // ipcMain.handle('file:read-if-exists', createReadFileIfExistsHandler(pathAllowlist, fs.promises));
 
   ipcMain.handle('file:read-binary', createReadBinaryFileHandler(pathAllowlist, fs.promises));
 
@@ -148,7 +200,9 @@ app.whenReady().then(() => {
     if (typeof path !== 'string' || typeof content !== 'string') {
       throw new Error('file:write requires string path and content');
     }
-    const allowedPath = pathAllowlist.assertAllowedAnnotationPath(path);
+    // 本项目缓存机制需要写 *.scoremap.cache.json（上游 M-2 曾收窄为仅 annotation），
+    // 因此保留 SidecarWritePath（*.annotation.json + *.scoremap.cache.json 两种后缀）。
+    const allowedPath = pathAllowlist.assertAllowedSidecarWritePath(path);
 
     // Security: Verify that parent directory chain is not escaped via symlinks
     const parentDir = dirname(allowedPath);
@@ -245,11 +299,14 @@ app.whenReady().then(() => {
   // 同様の拡張子検証に加え、存在確認・allowlist登録・recent追加をfsモジュール経由で行う。
   ipcMain.handle('library:get-all', createLibraryGetAllHandler(libraryService));
   ipcMain.handle('library:upsert', createLibraryUpsertHandler(libraryService));
-  ipcMain.handle('library:remove', createLibraryRemoveHandler(libraryService));
+  ipcMain.handle('library:remove', createLibraryRemoveHandler(libraryService, fs.promises));
   ipcMain.handle(
     'library:open',
     createLibraryOpenHandler(pathAllowlist, settingsService, fs.promises, libraryService)
   );
+
+  // 渲染进程注解/缓存读取仍依赖 file:read-if-exists，注册干净版本（无诊断日志）。
+  ipcMain.handle('file:read-if-exists', createReadFileIfExistsHandler(pathAllowlist, fs.promises));
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

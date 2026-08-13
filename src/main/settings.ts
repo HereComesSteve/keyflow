@@ -17,6 +17,14 @@ type KeyboardSize = 88 | 76 | 61 | 49;
 type PlaybackVoiceId = 'grand-piano' | 'electric-piano' | 'organ' | 'synth';
 type MetronomeVoiceId = 'click' | 'woodblock' | 'beep' | 'cowbell';
 
+/**
+ * 楽譜ページの配置方向（MuseScore 式のページビュー切替、TASK-拡張）。
+ * 'vertical' = A4 ページを縦に並べる / 'horizontal' = 横に並べる。
+ * renderer側（src/renderer/src/types/score-layout.ts）と同じ値だが、main/rendererは
+ * 別プロセス・別バンドルのため型定義は独立して持つ（KeyboardSize等と同じ既存パターン）。
+ */
+export type ScoreLayout = 'vertical' | 'horizontal';
+
 export interface AppSettings {
   recentFiles: Array<{ path: string; openedAt: string }>;
   midi: { selectedDeviceId: string | null; selectedDeviceIndex: number };
@@ -37,6 +45,8 @@ export interface AppSettings {
     showFingerings: boolean;
     /** 画面下鍵盤の鍵盤数プリセット（TASK-056）。 */
     keyboardSize: KeyboardSize;
+    /** 楽譜ページの配置方向（vertical=縦積み / horizontal=横並び）。 */
+    scoreLayout: ScoreLayout;
   };
   practice: {
     defaultErrorMode: 'wait' | 'pass';
@@ -63,6 +73,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     volume: 80,
     showFingerings: true,
     keyboardSize: 88,
+    scoreLayout: 'vertical',
   },
   practice: { defaultErrorMode: 'wait', metronomeEnabled: false, metronomeAccentEnabled: true },
   audio: { playbackVoice: 'grand-piano', metronomeVoice: 'click' },

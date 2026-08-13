@@ -20,6 +20,13 @@ interface LibraryEntry {
 
 type LibraryOpenResult = { ok: true } | { ok: false; reason: 'not-found' | 'invalid-extension' };
 
+// Web Bluetooth: 主プロセスの select-bluetooth-device から転送される発見デバイス。
+// renderer側の types/electron-api.d.ts の BluetoothDeviceInfo と同じ形。
+interface BluetoothDeviceInfo {
+  deviceId: string;
+  deviceName: string;
+}
+
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.
@@ -74,6 +81,23 @@ if (process.contextIsolated) {
           return () => ipcRenderer.removeListener('menu:open-about', handler);
         },
       },
+      // Web Bluetooth: 主プロセスの select-bluetooth-device から転送される発見デバイス
+      // 一覧を購読し、ユーザー選択/キャンセルを主プロセスへ通知する。
+      // requestDevice 呼出中のみ使用する（使用後は必ずunsubscribeすること）。
+      bluetooth: {
+        onDevicesUpdated: (callback: (devices: BluetoothDeviceInfo[]) => void): (() => void) => {
+          const handler = (_event: unknown, devices: BluetoothDeviceInfo[]): void =>
+            callback(devices);
+          ipcRenderer.on('bluetooth:devices-updated', handler);
+          return () => ipcRenderer.removeListener('bluetooth:devices-updated', handler);
+        },
+        selectDevice: (deviceId: string): void => {
+          ipcRenderer.send('bluetooth:select-device', deviceId);
+        },
+        cancelSelect: (): void => {
+          ipcRenderer.send('bluetooth:cancel-select');
+        },
+      },
       // TASK-088: 実起動E2E専用計装（__e2eStore__/__e2eMidiHooks__）の公開可否を
       // rendererが判定するためのフラグ。
       isE2E,
@@ -122,6 +146,21 @@ if (process.contextIsolated) {
         const handler = (): void => callback();
         ipcRenderer.on('menu:open-about', handler);
         return () => ipcRenderer.removeListener('menu:open-about', handler);
+      },
+    },
+    // Web Bluetooth: 発見デバイス一覧の購読とユーザー選択/キャンセルの通知（contextIsolated版と同じ）。
+    bluetooth: {
+      onDevicesUpdated: (callback: (devices: BluetoothDeviceInfo[]) => void): (() => void) => {
+        const handler = (_event: unknown, devices: BluetoothDeviceInfo[]): void =>
+          callback(devices);
+        ipcRenderer.on('bluetooth:devices-updated', handler);
+        return () => ipcRenderer.removeListener('bluetooth:devices-updated', handler);
+      },
+      selectDevice: (deviceId: string): void => {
+        ipcRenderer.send('bluetooth:select-device', deviceId);
+      },
+      cancelSelect: (): void => {
+        ipcRenderer.send('bluetooth:cancel-select');
       },
     },
     // TASK-088: 実起動E2E専用計装（__e2eStore__/__e2eMidiHooks__）の公開可否を

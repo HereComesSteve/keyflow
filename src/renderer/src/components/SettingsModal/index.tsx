@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS: SettingsModalState = {
     volume: 80,
     showFingerings: true,
     keyboardSize: 88,
+    scoreLayout: 'vertical',
   },
   practice: { defaultErrorMode: 'wait', metronomeEnabled: false, metronomeAccentEnabled: true },
   midi: { selectedDeviceId: null, selectedDeviceIndex: 0 },

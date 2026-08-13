@@ -61,16 +61,18 @@ describe('Header', () => {
     const onOpenSettings = vi.fn();
     const onFingeringSuggested = vi.fn();
     const onOpenLibrary = vi.fn();
+    const onOpenGlove = vi.fn();
     const props: React.ComponentProps<typeof Header> = {
       onOpenFile,
       onOpenSettings,
       onFingeringSuggested,
       onOpenLibrary,
+      onOpenGlove,
       score: null,
       ...overrides,
     };
     const utils = render(<Header {...props} />);
-    return { ...utils, onOpenFile, onOpenSettings, onFingeringSuggested, onOpenLibrary };
+    return { ...utils, onOpenFile, onOpenSettings, onFingeringSuggested, onOpenLibrary, onOpenGlove };
   };
 
   it('renders as a single-row header no taller than 56px (REQ-012-001/005)', () => {
@@ -396,6 +398,35 @@ describe('Header', () => {
       );
       expect(screen.getByRole('button', { name: 'Reset tempo' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Library' })).toBeInTheDocument();
+    });
+  });
+
+  describe('Bluetooth手套ボタン (🧤)', () => {
+    it('renders a glove button with a Japanese aria-label/tooltip', () => {
+      renderHeader();
+      const button = screen.getByTestId('header-glove-button');
+      expect(button.getAttribute('aria-label')).toBe('Bluetooth手套');
+      expect(button.getAttribute('title')).toBe('振動手套を接続します');
+    });
+
+    it('calls onOpenGlove when the glove button is clicked', () => {
+      const { onOpenGlove } = renderHeader();
+      fireEvent.click(screen.getByTestId('header-glove-button'));
+      expect(onOpenGlove).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not show the green status dot when disconnected (default)', () => {
+      usePracticeStore.setState({ isConnected: false });
+      renderHeader();
+      // 接続未成立時は緑点が存在しない
+      expect(screen.queryByTestId('glove-connection-dot')).toBeNull();
+    });
+
+    it('shows the green status dot when the glove is connected', () => {
+      usePracticeStore.setState({ isConnected: true });
+      renderHeader();
+      // 接続成功時は右上に緑点が表示される
+      expect(screen.getByTestId('glove-connection-dot')).not.toBeNull();
     });
   });
 });

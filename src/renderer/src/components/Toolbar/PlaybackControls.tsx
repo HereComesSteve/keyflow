@@ -3,6 +3,7 @@ import * as Tone from 'tone';
 import { usePracticeStore } from '../../store';
 import { useTranslation } from '../../lib/i18n/useTranslation';
 import { withTimeout } from '../../lib/audio-engine/with-timeout';
+import { deriveRepeatPlayRange, segmentsToRangeString } from '../../lib/audio-engine';
 import type { Score } from '../../types';
 
 /**
@@ -74,7 +75,8 @@ interface PlaybackControlsProps {
  * - 再生状態（playing/paused/stopped）は Zustand store で一元管理する
  */
 export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine, score }) => {
-  const { playbackState, setPlaybackState, voiceLoading } = usePracticeStore();
+  const { playbackState, setPlaybackState, voiceLoading, playbackRange, setPlaybackRange } =
+    usePracticeStore();
   const t = useTranslation();
   const toneStartedRef = useRef(false);
   // TASK-106: 再生開始要求の実行中フラグ。playbackStateが'playing'になるのは
@@ -163,6 +165,23 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
     setPlaybackState('stopped');
   }, [audioEngine, setPlaybackState, noScoreLoaded]);
 
+  // 清空播放范围文本框：清空后用户完全手动控制，软件不再按反复记号跳转
+  const handleClearRange = useCallback(() => {
+    setPlaybackRange('');
+  }, [setPlaybackRange]);
+
+  // 重置播放范围文本框：根据当前 score 重新推导反复记号段列表，覆盖用户的手动编辑
+  const handleResetRange = useCallback(() => {
+    if (!score) return;
+    try {
+      const segs = deriveRepeatPlayRange(score);
+      setPlaybackRange(segs.length > 0 ? segmentsToRangeString(segs) : '');
+    } catch (err) {
+      console.error('[PlaybackControls] deriveRepeatPlayRange failed:', err);
+      setPlaybackRange('');
+    }
+  }, [score, setPlaybackRange]);
+
   const handleTogglePlayPause = useCallback(() => {
     if (playbackState === 'playing') {
       handlePause();
@@ -227,6 +246,43 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
         style={noScoreLoaded || playbackState === 'stopped' ? BTN_DISABLED_STYLE : BTN_STYLE}
       >
         {t.playbackControls.stop}
+      </button>
+      <input
+        type="text"
+        value={playbackRange}
+        onChange={(e) => setPlaybackRange(e.target.value)}
+        placeholder={t.playbackControls.rangePlaceholder}
+        title={t.playbackControls.rangeTitle}
+        disabled={noScoreLoaded}
+        style={{
+          height: '36px',
+          width: '140px',
+          padding: '0 8px',
+          fontSize: '13px',
+          borderRadius: '6px',
+          border: '1px solid #9ca3af',
+          opacity: noScoreLoaded ? 0.5 : 1,
+        }}
+      />
+      <button
+        type="button"
+        onClick={handleClearRange}
+        disabled={noScoreLoaded || playbackRange === ''}
+        title="清空当前播放范围（改为线性播放）"
+        style={
+          noScoreLoaded || playbackRange === '' ? BTN_DISABLED_STYLE : BTN_STYLE
+        }
+      >
+        清空
+      </button>
+      <button
+        type="button"
+        onClick={handleResetRange}
+        disabled={noScoreLoaded}
+        title="根据乐谱反复记号重置播放范围"
+        style={noScoreLoaded ? BTN_DISABLED_STYLE : BTN_STYLE}
+      >
+        重置
       </button>
     </div>
   );

@@ -1,6 +1,15 @@
 import { AppSettings } from './settings';
 import { LibraryEntry, LibraryOpenResult } from './library';
 
+/**
+ * Web Bluetooth: 主プロセスの select-bluetooth-device から転送される発見デバイス。
+ * preload側の BluetoothDeviceInfo と同じ形。
+ */
+export interface BluetoothDeviceInfo {
+  deviceId: string;
+  deviceName: string;
+}
+
 export interface ElectronAPI {
   file: {
     showOpenDialog(): Promise<string | null>;
@@ -55,6 +64,19 @@ export interface ElectronAPI {
      * 戻り値の関数を呼ぶと購読を解除する（App.tsx側はuseEffectのcleanupで呼び出す）。
      */
     onOpenAbout(callback: () => void): () => void;
+  };
+  /**
+   * Web Bluetooth: select-bluetooth-device で主プロセスが発見したデバイス一覧を
+   * 受信し、ユーザーが選択/キャンセルした結果を主プロセスへ通知する。
+   * requestDevice 呼出中のみ使用し、終了後は必ずunsubscribeする。
+   */
+  bluetooth?: {
+    /** 発見デバイス一覧の更新（`bluetooth:devices-updated`）を購読する。 */
+    onDevicesUpdated(callback: (devices: BluetoothDeviceInfo[]) => void): () => void;
+    /** ユーザーが選択したデバイスIDを主プロセスへ送り、requestDeviceを解決させる。 */
+    selectDevice(deviceId: string): void;
+    /** スキャンをキャンセルし、requestDeviceをNotFoundErrorでrejectさせる。 */
+    cancelSelect(): void;
   };
   /**
    * TASK-088: 実起動E2E（Playwright for Electron）実行時のみtrueになるフラグ。

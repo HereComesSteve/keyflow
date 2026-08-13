@@ -1,4 +1,5 @@
 import type { KeyboardSize } from './keyboard';
+import type { ScoreLayout } from './score-layout';
 import type { PlaybackVoiceId } from '../lib/audio-engine/voices';
 import type { MetronomeVoiceId } from '../lib/audio-engine/metronome-voices';
 
@@ -27,6 +28,8 @@ export interface AppSettings {
     showFingerings: boolean;
     /** 画面下鍵盤の鍵盤数プリセット（TASK-056）。 */
     keyboardSize: KeyboardSize;
+    /** 楽譜ページの配置方向（vertical=縦積み / horizontal=横並び）。 */
+    scoreLayout: ScoreLayout;
   };
   practice: {
     defaultErrorMode: 'wait' | 'pass';

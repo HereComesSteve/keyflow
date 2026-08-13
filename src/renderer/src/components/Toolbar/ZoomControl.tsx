@@ -18,12 +18,14 @@ const ZOOM_LEVELS: Array<{ value: number; label: string }> = [
 
 /**
  * 楽譜の表示倍率（ズーム）を変更するUI（REQ-002-006）。
- * `setZoom`（ui-slice）を直接呼び出すため、モーダルを開閉せずに
- * ScoreRenderer（osmd-controller.setZoom）へ即座に反映される。
+ * `setZoom`（ui-slice）を直接呼び出す。ScoreRenderer 側は CSS zoom で
+ * 倍率を適用するため、変更しても OSMD の再描画は発生しない。
+ * Ctrl+滚轮连续缩放会产生预设以外的任意值，此时在列表前部显示当前百分比。
  */
 export const ZoomControl: React.FC = () => {
   const { zoom, setZoom } = usePracticeStore();
   const t = useTranslation();
+  const isPreset = ZOOM_LEVELS.some((level) => level.value === zoom);
 
   return (
     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -45,6 +47,9 @@ export const ZoomControl: React.FC = () => {
           cursor: 'pointer',
         }}
       >
+        {!isPreset && (
+          <option value={zoom}>{Math.round(zoom * 100)}%</option>
+        )}
         {ZOOM_LEVELS.map((level) => (
           <option key={level.value} value={level.value}>
             {level.label}

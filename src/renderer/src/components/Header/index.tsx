@@ -7,6 +7,7 @@ import { Popover } from './Popover';
 import { QuickPanel } from './QuickPanel';
 import { MetronomeToggle } from './MetronomeToggle';
 import { useTranslation } from '../../lib/i18n/useTranslation';
+import { usePracticeStore } from '../../store';
 import type { Score } from '../../types/score';
 import type { FingerAssignment } from '../../types/annotation';
 
@@ -31,6 +32,12 @@ export interface HeaderProps {
    * クリック時の挙動自体はApp.tsx側のonOpenLibraryが担い、本propsは表示切り替えのみ行う。
    */
   isReturnToScoreMode?: boolean;
+  /** Bluetooth手套接続パネルを開くボタンクリック時に呼び出される。 */
+  onOpenGlove: () => void;
+  /** 指法编辑模式是否开启（QuickPanel 的 FingeringEditToggle 受控状态）。 */
+  fingeringEditMode?: boolean;
+  /** 指法编辑模式切换回调（App 持有状态）。 */
+  onFingeringEditModeChange?: (checked: boolean) => void;
 }
 
 const ICON_BUTTON_STYLE: React.CSSProperties = {
@@ -81,10 +88,15 @@ export const Header: React.FC<HeaderProps> = ({
   fingeringDisabled,
   onOpenLibrary,
   isReturnToScoreMode = false,
+  onOpenGlove,
+  fingeringEditMode,
+  onFingeringEditModeChange,
 }) => {
   const t = useTranslation();
   const [isQuickPanelOpen, setIsQuickPanelOpen] = useState(false);
   const quickPanelAnchorRef = useRef<HTMLButtonElement>(null);
+  // Bluetooth手套の接続状態を購読し、🧤ボタン右上の緑点表示に反映する。
+  const isGloveConnected = usePracticeStore((s) => s.isConnected);
 
   return (
     <div data-testid="app-header" style={{ position: 'relative' }}>
@@ -147,6 +159,36 @@ export const Header: React.FC<HeaderProps> = ({
             flexShrink: 0,
           }}
         >
+          <button
+            type="button"
+            onClick={onOpenGlove}
+            aria-label={t.header.gloveButtonAriaLabel}
+            title={t.header.gloveButtonTitle}
+            data-testid="header-glove-button"
+            style={{ ...ICON_BUTTON_STYLE, position: 'relative' }}
+          >
+            <span aria-hidden="true" style={{ fontSize: '18px' }}>
+              🧤
+            </span>
+            {/* 接続成功時に右上へ緑点を表示する（REQ: 接続成功後ボタンに緑点状態） */}
+            {isGloveConnected && (
+              <span
+                data-testid="glove-connection-dot"
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  top: '4px',
+                  right: '4px',
+                  width: '8px',
+                  height: '8px',
+                  backgroundColor: '#10b981',
+                  borderRadius: '50%',
+                  border: '1px solid #fff',
+                }}
+              />
+            )}
+          </button>
+
           <button
             type="button"
             onClick={onOpenLibrary}
@@ -243,6 +285,8 @@ export const Header: React.FC<HeaderProps> = ({
           score={score}
           onFingeringSuggested={onFingeringSuggested}
           fingeringDisabled={fingeringDisabled}
+          fingeringEditMode={fingeringEditMode}
+          onFingeringEditModeChange={onFingeringEditModeChange}
         />
       </Popover>
     </div>

@@ -45,6 +45,8 @@ describe('createLibraryUpsertHandler', () => {
     const handler = createLibraryUpsertHandler(libraryService);
 
     await handler({} as never, { path: '/a.musicxml', title: 'A', composer: 'C' });
+    // upsert は setImmediate で遅延実行されるため1 tick 待つ
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(libraryService.upsert).toHaveBeenCalledWith({
       path: '/a.musicxml',
@@ -75,12 +77,26 @@ describe('createLibraryUpsertHandler', () => {
 });
 
 describe('createLibraryRemoveHandler', () => {
-  it('forwards the path to LibraryService.remove', async () => {
+  it('forwards the path to LibraryService.remove and deletes sidecar files', async () => {
     const libraryService = createLibraryServiceMock();
-    const handler = createLibraryRemoveHandler(libraryService);
+    const unlinkMock = vi.fn().mockResolvedValue(undefined);
+    const handler = createLibraryRemoveHandler(libraryService, { unlink: unlinkMock });
 
     await handler({} as never, '/a.musicxml');
 
+    expect(libraryService.remove).toHaveBeenCalledWith('/a.musicxml');
+    // .annotation.json と .scoremap.cache.json の両方を unlink する
+    expect(unlinkMock).toHaveBeenCalledWith('/a.musicxml.annotation.json');
+    expect(unlinkMock).toHaveBeenCalledWith('/a.musicxml.scoremap.cache.json');
+  });
+
+  it('ignores unlink errors for non-existent sidecar files', async () => {
+    const libraryService = createLibraryServiceMock();
+    const unlinkMock = vi.fn().mockRejectedValue(new Error('ENOENT'));
+    const handler = createLibraryRemoveHandler(libraryService, { unlink: unlinkMock });
+
+    // エラーを投げずに完了する
+    await expect(handler({} as never, '/a.musicxml')).resolves.toBeUndefined();
     expect(libraryService.remove).toHaveBeenCalledWith('/a.musicxml');
   });
 
@@ -127,6 +143,8 @@ describe('createLibraryOpenHandler', () => {
       libraryService
     );
     const result = await handler({} as never, '/scores/a.musicxml');
+    // addRecentFile は setImmediate で遅延実行されるため1 tick 待つ
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(result).toEqual({ ok: true });
     expect(allowMusicXmlSpy).toHaveBeenCalledWith('/scores/a.musicxml');
