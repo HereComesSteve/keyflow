@@ -22,6 +22,11 @@ import {
   TIME_SIGNATURE_OPTIONS,
   BPM_MIN,
   BPM_MAX,
+  buildIntensityCommand,
+  INTENSITY_MIN,
+  INTENSITY_MAX,
+  INTENSITY_FINGER_MIN,
+  INTENSITY_FINGER_MAX,
 } from '../../lib/bluetooth/glove-commands';
 import { useTranslation } from '../../lib/i18n/useTranslation';
 import { formatMessage } from '../../lib/i18n/format';
@@ -110,6 +115,12 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
   // 拍号设置：当前选择与上次成功设置的值（label 字符串）。
   const [timeSignature, setTimeSignature] = useState('4/4');
   const [timeSignatureValue, setTimeSignatureValue] = useState('4/4');
+
+  // 马达强度设置：手指 1~5、强度输入、错误提示。目标设备复用上面的 target 状态
+  // （强度区的左右手按钮与模式/写入区的目标按钮共用 handleTargetLeft/Right）。
+  const [strengthFinger, setStrengthFinger] = useState(INTENSITY_FINGER_MIN);
+  const [intensityInput, setIntensityInput] = useState('128');
+  const [intensityStatus, setIntensityStatus] = useState('');
 
   // 清除乐谱：目标存储、分区、确认弹窗开关。
   const [clearTarget, setClearTarget] = useState<'sram' | 'eeprom'>('sram');
@@ -461,6 +472,56 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     const desc = formatMessage(t.glove.logSetTimeSignature, { value: timeSignature });
     if (await sendCommand(buildTimeSignatureCommand(beats), desc)) {
       setTimeSignatureValue(timeSignature);
+    }
+  };
+
+  // 校验强度输入（1~255），失败时记录错误并返回 null。
+  const parseIntensity = (): number | null => {
+    const intensity = Number(intensityInput);
+    if (!Number.isFinite(intensity) || intensity < INTENSITY_MIN || intensity > INTENSITY_MAX) {
+      setIntensityStatus(t.glove.intensityRangeError);
+      addGloveLog(`[${formatTimestamp(new Date())}] ${t.glove.intensityRangeError}`);
+      return null;
+    }
+    setIntensityStatus('');
+    return intensity;
+  };
+
+  // 组装并发送强度指令 F9 25 [引脚索引] [强度]（固定 4 字节、无 XOR 校验）。
+  const sendIntensity = (finger: number, intensity: number): Promise<boolean> => {
+    const handLabel = target === 'left' ? t.glove.targetLeft : t.glove.targetRight;
+    const desc = formatMessage(t.glove.logSetIntensity, {
+      finger,
+      value: intensity,
+      hand: handLabel,
+    });
+    return sendCommand(buildIntensityCommand(finger, intensity), desc);
+  };
+
+  // 发送前先发目标指令 F9 24（决定左手本地执行 / 右手由左手转发）。目标与
+  // 模式/写入区共用 target 状态，强度区的左右手按钮即 handleTargetLeft/Right。
+  const ensureIntensityTarget = async (): Promise<boolean> => {
+    const targetCmd = target === 'left' ? TARGET_COMMANDS.left : TARGET_COMMANDS.right;
+    const targetDesc =
+      target === 'left' ? t.glove.logWriteTargetLeft : t.glove.logWriteTargetRight;
+    return sendCommand(targetCmd, targetDesc);
+  };
+
+  // 单指强度：目标 + F9 25。成功即代表硬件已收到（无确认回包）。
+  const handleSendIntensity = async (): Promise<void> => {
+    const intensity = parseIntensity();
+    if (intensity === null) return;
+    if (!(await ensureIntensityTarget())) return;
+    await sendIntensity(strengthFinger, intensity);
+  };
+
+  // 一键发送：目标 + 五根手指各一条 F9 25，全部设为输入框中的强度。
+  const handleSendAllIntensity = async (): Promise<void> => {
+    const intensity = parseIntensity();
+    if (intensity === null) return;
+    if (!(await ensureIntensityTarget())) return;
+    for (let finger = INTENSITY_FINGER_MIN; finger <= INTENSITY_FINGER_MAX; finger++) {
+      if (!(await sendIntensity(finger, intensity))) return;
     }
   };
 
@@ -1184,6 +1245,102 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
           <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
             {formatMessage(t.glove.timeSignatureCurrent, { value: timeSignatureValue })}
           </div>
+        </div>
+
+        {/* 🖐 马达强度设置区 */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>🖐 {t.glove.intensitySection}</div>
+
+          {/* 目标设备（左右手）：选左手→左手本地执行，选右手→由左手转发给右手。
+              与模式/写入区的目标按钮共用 target 状态。 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.writeTargetLabel}</span>
+            <button
+              type="button"
+              onClick={handleTargetLeft}
+              disabled={controlsDisabled}
+              style={commandButtonStyle(target === 'left')}
+            >
+              {t.glove.targetLeft}
+            </button>
+            <button
+              type="button"
+              onClick={handleTargetRight}
+              disabled={controlsDisabled}
+              style={commandButtonStyle(target === 'right')}
+            >
+              {t.glove.targetRight}
+            </button>
+          </div>
+
+          {/* 手指选择 + 强度输入 + 发送/一键发送 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.intensityFingerLabel}</span>
+            <select
+              value={strengthFinger}
+              onChange={(e) => setStrengthFinger(Number(e.target.value))}
+              disabled={controlsDisabled}
+              style={{
+                padding: '4px 8px',
+                borderRadius: '4px',
+                border: '1px solid #d1d5db',
+                backgroundColor: '#fff',
+                color: '#374151',
+                fontSize: '0.8125rem',
+              }}
+            >
+              {Array.from(
+                { length: INTENSITY_FINGER_MAX - INTENSITY_FINGER_MIN + 1 },
+                (_, i) => {
+                  const v = INTENSITY_FINGER_MIN + i;
+                  return (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  );
+                }
+              )}
+            </select>
+            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.intensityValueLabel}</span>
+            <input
+              type="number"
+              value={intensityInput}
+              onChange={(e) => setIntensityInput(e.target.value)}
+              disabled={controlsDisabled}
+              min={INTENSITY_MIN}
+              max={INTENSITY_MAX}
+              style={{
+                width: '72px',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                border: '1px solid #d1d5db',
+                backgroundColor: '#fff',
+                color: '#374151',
+                fontSize: '0.8125rem',
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleSendIntensity}
+              disabled={controlsDisabled}
+              style={commandButtonStyle()}
+            >
+              {t.glove.intensitySendButton}
+            </button>
+            <button
+              type="button"
+              onClick={handleSendAllIntensity}
+              disabled={controlsDisabled}
+              style={{ ...commandButtonStyle(), backgroundColor: '#7c3aed', color: 'white', borderColor: '#7c3aed' }}
+            >
+              {t.glove.intensitySendAllButton}
+            </button>
+          </div>
+
+          {intensityStatus && (
+            <div style={{ fontSize: '0.8125rem', color: '#dc2626' }}>{intensityStatus}</div>
+          )}
+          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{t.glove.intensityHint}</div>
         </div>
 
         {/* 🗑 清除乐谱区 */}

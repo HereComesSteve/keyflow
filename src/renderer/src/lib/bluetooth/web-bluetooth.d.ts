@@ -21,10 +21,23 @@ interface BluetoothRequestDeviceOptions {
   acceptAllDevices?: boolean;
 }
 
+interface BluetoothCharacteristicProperties {
+  readonly broadcast: boolean;
+  readonly read: boolean;
+  readonly write: boolean;
+  readonly writeWithoutResponse: boolean;
+  readonly notify: boolean;
+  readonly indicate: boolean;
+  readonly authenticatedSignedWrites: boolean;
+  readonly reliableWrite: boolean;
+  readonly writableAuxiliaries: boolean;
+}
+
 interface BluetoothRemoteGATTCharacteristic {
   readonly service: BluetoothRemoteGATTService;
   readonly uuid: string;
   readonly value: DataView | null;
+  readonly properties: BluetoothCharacteristicProperties;
   writeValue(data: Uint8Array | ArrayBuffer): Promise<void>;
   writeValueWithResponse(data: Uint8Array | ArrayBuffer): Promise<void>;
   writeValueWithoutResponse(data: Uint8Array | ArrayBuffer): Promise<void>;

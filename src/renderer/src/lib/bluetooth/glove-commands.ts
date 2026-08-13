@@ -168,3 +168,35 @@ export const TIME_SIGNATURE_OPTIONS = [
 export function buildTimeSignatureCommand(beats: number): number[] {
   return [0xf9, 0x21, (beats << 4) & 0xff, 0x00];
 }
+
+/* ===================== 马达强度设置 ===================== */
+
+/** 马达强度设置范围（0~255，UI 限制 1~255）。 */
+export const INTENSITY_MIN = 1;
+export const INTENSITY_MAX = 255;
+/** 手指编号范围（1~5，对应固件引脚索引 0~4）。 */
+export const INTENSITY_FINGER_MIN = 1;
+export const INTENSITY_FINGER_MAX = 5;
+
+/**
+ * 构建马达强度设置指令: F9 25 [引脚索引] [强度]。
+ *
+ * 注意：指令固定 4 字节且**无 XOR 校验**（只有乐谱 0xFB 指令有校验），
+ * 强度值直接放在第 4 字节，不要额外追加一个 00（AI 常在数据后多加一字节）。
+ * 例: 手指1 强度200 → F9 25 00 C8。
+ *
+ * finger 为用户视角的手指编号 1~5，内部转换为固件引脚索引 0~4。
+ * 目标设备（左手本地 / 右手转发）由调用方先发 F9 24 00/01 决定，
+ * 本函数只组装强度指令本身。
+ */
+export function buildIntensityCommand(finger: number, intensity: number): number[] {
+  const fingerClamped = Math.max(
+    INTENSITY_FINGER_MIN,
+    Math.min(INTENSITY_FINGER_MAX, Math.trunc(finger))
+  );
+  const intensityClamped = Math.max(
+    INTENSITY_MIN,
+    Math.min(INTENSITY_MAX, Math.trunc(intensity))
+  );
+  return [0xf9, 0x25, fingerClamped - INTENSITY_FINGER_MIN, intensityClamped];
+}

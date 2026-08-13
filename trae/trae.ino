@@ -46,7 +46,29 @@ uint16_t currentCmdIndex = 0;     // 当前执行到的指令索引
 uint8_t currentMotorState = 0;    // 当前所有马达的状态，用于暂停恢复
 
 // ================= 运行时模式（可切换，不保存） =================
-bool dualMode = 0;           // true=双手模式, false=单手模式（默认单手）
+bool dualMode = 0;           // true=双手模式, false=单手模式（默认双手）
+
+// ================= 乐谱目标设备 =================
+const uint8_t TARGET_LOCAL = 0;   // 本地（左手/主机）
+const uint8_t TARGET_SLAVE = 1;   // 从机（右手）
+uint8_t scoreTarget = TARGET_LOCAL;  // 当前乐谱目标设备，默认左手
+
+// ================= 从机状态管理（主机维护，非阻塞推断） =================
+// 显式指定 uint8_t 底层类型，避免默认 int 占用 2 字节
+enum SlaveState : uint8_t {
+    SLAVE_IDLE,        // 空闲，可接收新乐谱
+    SLAVE_RECEIVING,   // 正在接收乐谱数据
+    SLAVE_READY,       // 乐谱已完整接收，可播放
+    SLAVE_PLAYING,     // 正在播放
+    SLAVE_PAUSED,      // 已暂停
+    SLAVE_ERROR        // 通信异常或超时
+};
+SlaveState slaveState = SLAVE_IDLE;  // 从机状态（仅主机使用）
+
+// ================= 马达强度设置（PWM） =================
+// 引脚索引: 0=pin3, 1=pin5, 2=pin6, 3=pin9, 4=pin10
+// 默认值128 (50%占空比)，通过 0xF9 0x25 指令动态调整
+uint8_t motorIntensity[5] = {128, 128, 128, 128, 128};
 
 // ================= 循环等待状态 =================
 bool waitingLoop = false;         // 是否处于播放结束等待重启状态
@@ -147,7 +169,7 @@ void clearScore();
 void storeScoreData(uint8_t beatPos, uint8_t motorCtrl);
 void parseCommand(uint8_t *cmd);
 void systemReset();
-void selectPlaysource(uint8_t b2);
+void playEepromPartition(uint8_t partition);
 void eepromWriteByte(uint16_t addr, uint8_t data);
 uint8_t eepromReadByte(uint16_t addr);
 bool eepromFetchNext();
@@ -169,6 +191,7 @@ void clearSlaveTimingBuffers();
 void eepromWritePage(uint16_t addr, uint8_t *data, uint8_t len);
 void flushEepromCache();
 unsigned long playbackAnchorTime();  // 播放起始时刻（含从设备校时偏移）
+void setSlaveState(SlaveState newState);  // 调试：打印并更新从机状态
 
 // ================= XOR 校验函数 =================
 bool verifyXor(uint8_t sync, uint8_t b1, uint8_t b2, uint8_t b3) ;
@@ -218,6 +241,12 @@ void initBluetooth() {
 // 【SRAM内存播放】
 void startPlayback() {
   Serial.println(F("startPlayback called"));
+  // 清除循环等待状态，确保新播放立即响应
+  waitingLoop = false;
+  waitingLoopSource = 0;
+  // [调试] 打印播放启动时的缓存指令总数
+  Serial.print(F("[PLAY] totalCmds="));
+  Serial.println(totalCmds);
   if (totalCmds == 0) return;
   currentCmdIndex = 0;
   sectionStartTime = playbackAnchorTime();
@@ -225,8 +254,6 @@ void startPlayback() {
   isPause = false;
   pauseStartTime = 0;
   totalPauseTime = 0;
-  waitingLoop = false;
-  waitingLoopSource = 0;
   recalcTiming();
 }
 
@@ -244,7 +271,7 @@ void stopPlayback() {
   eepromPauseStart = 0;
   eepromTotalPause = 0;
   hasFutureAction = false;
-  for (int i = 0; i < numLeds; i++) digitalWrite(ledPins[i], LOW);
+  for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
   currentMotorState = 0;
 }
 
@@ -255,10 +282,12 @@ void executeCommand(uint8_t motorCtrl) {
   for (int i = 0; i < numLeds; i++) {
     if (mask & (1 << i)) {
       if (onOff) {
-        digitalWrite(ledPins[i], HIGH);
+        // 使用 analogWrite 输出 PWM 强度
+        analogWrite(ledPins[i], motorIntensity[i]);
         currentMotorState |= (1 << i);
       } else {
-        digitalWrite(ledPins[i], LOW);
+        // 关闭马达时输出 0
+        analogWrite(ledPins[i], 0);
         currentMotorState &= ~(1 << i);
       }
     }
@@ -298,7 +327,7 @@ void schedulePlayback() {
 
   // 【SRAM内存播放】暂停：熄灭输出并记录暂停起点
   if (isPause) {
-    for (int i = 0; i < numLeds; i++) digitalWrite(ledPins[i], LOW);
+    for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
     // 【修复5】从设备使用主机统一时间基准，禁止本地独立计时
     if (pauseStartTime == 0) pauseStartTime = playbackAnchorTime();
     return;
@@ -312,14 +341,12 @@ void schedulePlayback() {
     pauseStartTime = 0;
     totalPauseTime = 0;
     for (int i = 0; i < numLeds; i++) {
-      digitalWrite(ledPins[i], (currentMotorState & (1 << i)) ? HIGH : LOW);
+      analogWrite(ledPins[i], (currentMotorState & (1 << i)) ? motorIntensity[i] : 0);
     }
   }
 
   // 【修复5】播放进度完全跟随主机统一时间基准，从机禁止用本地 micros()
   unsigned long now = playbackAnchorTime();
-  // 【修复】跨小节后 sectionStartTime 可能在未来，等待到小节开始时间再执行
-  if (now < sectionStartTime) return;
   uint64_t elapsedUs = (uint64_t)(now - sectionStartTime);
   uint32_t elapsedTicks = elapsedUs / tickDurationUs;
 
@@ -330,8 +357,6 @@ void schedulePlayback() {
     // 小节回绕检测
     if (currentCmdIndex > 0 && cmdTick < cmdTicks[currentCmdIndex - 1]) {
       sectionStartTime += barDurationUs;
-      // 【修复】防止 unsigned 回绕：如果还没到下一小节开始时间，等待
-      if (now < sectionStartTime) break;
       elapsedUs = (uint64_t)(now - sectionStartTime);
       elapsedTicks = elapsedUs / tickDurationUs;
     }
@@ -343,10 +368,15 @@ void schedulePlayback() {
     } else {
       break;
     }
+    // 【修复6】内层循环刷新 anchor 时间（与 EEPROM 调度 eepromSchedule 保持一致）。
+    // 同一帧处理多条指令时，每条都用最新时间判断，避免陈旧 now 导致提前/滞后执行。
+    now = playbackAnchorTime();
+    elapsedUs = (uint64_t)(now - sectionStartTime);
+    elapsedTicks = elapsedUs / tickDurationUs;
   }
 
   if (currentCmdIndex >= totalCmds) {
-    for (int i = 0; i < numLeds; i++) digitalWrite(ledPins[i], LOW);
+    for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
     currentMotorState = 0;
     if (loopPlayback) {
       // 【SRAM内存播放】循环：进入间隔等待
@@ -372,7 +402,7 @@ void eepromSchedule() {
 
   // 【EEPROM离线播放】暂停
   if (isPause) {
-    for (int i = 0; i < numLeds; i++) digitalWrite(ledPins[i], LOW);
+    for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
     // 【修复5】从设备使用主机统一时间基准
     if (eepromPauseStart == 0) eepromPauseStart = playbackAnchorTime();
     return;
@@ -386,7 +416,7 @@ void eepromSchedule() {
     eepromPauseStart = 0;
     eepromTotalPause = 0;
     for (int i = 0; i < numLeds; i++) {
-      digitalWrite(ledPins[i], (currentMotorState & (1 << i)) ? HIGH : LOW);
+      analogWrite(ledPins[i], (currentMotorState & (1 << i)) ? motorIntensity[i] : 0);
     }
   }
 
@@ -402,8 +432,6 @@ void eepromSchedule() {
 
   // 【修复5】EEPROM 播放进度同样跟随主机统一时间基准
   unsigned long now = playbackAnchorTime();
-  // 【修复】跨小节后 eepromSectionStart 可能在未来，等待到小节开始时间再执行
-  if (now < eepromSectionStart) return;
   uint64_t elapsedUs = (uint64_t)(now - eepromSectionStart);
   uint32_t elapsedTicks = elapsedUs / tickDurationUs;
 
@@ -412,11 +440,6 @@ void eepromSchedule() {
     // 小节回绕检测
     if (eepromCurTick < eepromLastTick) {
       eepromSectionStart += barDurationUs;
-      // 【修复】防止 unsigned 回绕：如果还没到下一小节开始时间，等待
-      if (now < eepromSectionStart) {
-        eepromLastTick = eepromCurTick;  // 更新 lastTick 避免重复触发跨小节
-        break;
-      }
       elapsedUs = (uint64_t)(now - eepromSectionStart);
       elapsedTicks = elapsedUs / tickDurationUs;
     }
@@ -432,7 +455,7 @@ void eepromSchedule() {
       if (!eepromFetchNext()) {
         if (loopPlayback) {
           // 【EEPROM离线播放】循环：进入间隔等待
-          for (int i = 0; i < numLeds; i++) digitalWrite(ledPins[i], LOW);
+          for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
           currentMotorState = 0;
           eepromPlaying = false;
           waitingLoop = true;
@@ -442,7 +465,7 @@ void eepromSchedule() {
         } else {
           // 【EEPROM离线播放】非循环：终止
           eepromPlaying = false;
-          for (int i = 0; i < numLeds; i++) digitalWrite(ledPins[i], LOW);
+          for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
           currentMotorState = 0;
           Serial.println(F("EEPROM: playback finished"));
           return;
@@ -479,7 +502,14 @@ void clearScore() {
 // ================= 系统复位 =================
 void systemReset() {
   Serial.println(F("系统复位"));
+  // 刷写 EEPROM 缓存，防止数据丢失
+  if (eepromWriting) {
+    flushEepromCache();
+  }
   stopPlayback();
+  // 清空 SRAM 乐谱缓冲区
+  totalCmds = 0;
+  // 清空 EEPROM 相关状态
   eepromCacheLen = 0;
   eepromWriting = false;
   eepromWriteAddr = 0;
@@ -494,6 +524,7 @@ void systemReset() {
   eepromSectionStart = 0;
   eepromPauseStart = 0;
   eepromTotalPause = 0;
+  // 清空播放状态
   isPause = false;
   pauseStartTime = 0;
   totalPauseTime = 0;
@@ -501,6 +532,7 @@ void systemReset() {
   waitingLoopSource = 0;
   waitStartTime = 0;
   currentMotorState = 0;
+  // 清空时间同步状态
   timeSynced = false;
   timeOffset = 0;
   hasFutureAction = false;
@@ -509,6 +541,13 @@ void systemReset() {
   masterTimingState = MT_IDLE;
   slaveTimingState = ST_IDLE;
   expectingDataPacket = false;
+  // 清空新增状态变量
+  scoreTarget = TARGET_LOCAL;   // 重置目标设备为左手（主机）
+  slaveState = SLAVE_IDLE;      // 重置从机状态
+  // 重置马达强度为默认值 128 (50%占空比)
+  for (int i = 0; i < 5; i++) {
+    motorIntensity[i] = 128;
+  }
   Serial.println(F("System reset done"));
 }
 
@@ -626,27 +665,27 @@ void storeScoreData(uint8_t beatPos, uint8_t motorCtrl) {
     cmdTicks[totalCmds] = beatPos;
     cmdMotors[totalCmds] = motorCtrl;
     totalCmds++;
+    // [调试] 打印 SRAM 乐谱缓存写入计数
+    Serial.print(F("[STORE] scoreCmdCount="));
+    Serial.println(totalCmds);
   } else {
     // 【修复4】缓冲区满时打印警告，提示指令丢弃
     Serial.println(F("警告：指令缓冲区已满，丢弃指令"));
   }
 }
 
-void selectPlaysource(uint8_t b2) {
+// ================= EEPROM 分区直接播放（0xF9 0x05） =================
+// partition 直接对应 eepromBases 索引（0~7）
+void playEepromPartition(uint8_t partition) {
   stopPlayback();
   isPause = false;
   pauseStartTime = 0;
   totalPauseTime = 0;
   eepromPauseStart = 0;
   eepromTotalPause = 0;
-  Serial.print(F("selectPlaysource: b2=")); Serial.println(b2);
-  if (b2 == 0) {
-    // 【SRAM内存播放】
-    startPlayback();
-  } else if (b2 >= 1 && b2 <= 7) {
-    // 【EEPROM离线播放】分区号直接对应 eepromBases 索引（与写入一致）
+  if (partition <= 7) {
     eepromPlaying = true;
-    eepromReadBase = eepromBases[b2];
+    eepromReadBase = eepromBases[partition];  // 直接对应分区号，无需偏移
     eepromReadAddr = eepromReadBase;
     eepromCmdReady = false;
     eepromCurTick = 0;
@@ -656,19 +695,27 @@ void selectPlaysource(uint8_t b2) {
     eepromPauseStart = 0;
     eepromTotalPause = 0;
     isPause = false;
+    Serial.print(F("EEPROM play partition: "));
+    Serial.println(partition);
   }
 }
 
 // ================= 双手模式：切换模式 =================
 void switchMode(uint8_t mode) {
   Serial.println(F("切换模式"));
+  // 停止当前播放，确保模式切换时所有播放状态被彻底清理
+  stopPlayback();
+  // ---- 模式切换时重置从机状态和目标设备 ----
+  setSlaveState(SLAVE_IDLE);
+  scoreTarget = TARGET_LOCAL;  // 重置目标设备为左手（主机）
+
   if (mode == 0) {
     dualMode = false;
     Serial.println(F("Switched to SINGLE mode"));
   } else {
     dualMode = true;
     Serial.println(F("Switched to DUAL mode"));
-    // 【主设备】进入双手模式后发起校时
+    // 【主设备】进入双手模式后发起校时，保证主从时间基准对齐
     if (IS_MASTER) {
       timeSynced = false;
       startTimingSync();
@@ -717,41 +764,62 @@ void checkFutureAction() {
   if (microsReached(futureExecTime)) {
     hasFutureAction = false;
     switch (futureActionCmd) {
-      case 0x01: isPause = true; Serial.println(F("Future: PAUSE")); break;
+      case 0x01:
+        waitingLoop = false;        // 终止循环等待
+        waitingLoopSource = 0;
+        isPause = true;
+        Serial.println(F("Future: PAUSE"));
+        break;
       case 0x02: isPause = false; Serial.println(F("Future: RESUME")); break;
       case 0x03: stopPlayback(); Serial.println(F("Future: STOP")); break;
       case 0x04:
-        if (futureActionParam == 0) startPlayback();
-        else selectPlaysource(futureActionParam);
+        // 0x04 仅负责 SRAM 播放（主流程只发 param=0），EEPROM 由 0x05 负责
+        startPlayback();
         Serial.println(F("Future: PLAY"));
         break;
-      case 0x05: // EEPROM 分区播放（延迟执行）
-        stopPlayback();
-        isPause = false;
-        if (futureActionParam <= 7) {
-          eepromPlaying = true;
-          eepromReadBase = eepromBases[futureActionParam];
-          eepromReadAddr = eepromReadBase;
-          eepromCmdReady = false;
-          eepromCurTick = 0;
-          eepromCurMotor = 0;
-          eepromLastTick = 0;
-          eepromSectionStart = playbackAnchorTime();
-          eepromPauseStart = 0;
-          eepromTotalPause = 0;
-        }
-        Serial.print(F("Future: EEPROM PLAY partition "));
-        Serial.println(futureActionParam);
+      case 0x05:
+        playEepromPartition(futureActionParam);
+        Serial.println(F("Future: EEPROM PLAY"));
         break;
       default: break;
     }
   }
 }
 
-// ================= 双手模式：转发普通指令到从设备（透传） =================
+// ================= 调试：打印并更新从机状态 =================
+// 仅增加日志输出，不改变任何业务逻辑
+void setSlaveState(SlaveState newState) {
+  if (slaveState != newState) {
+    Serial.print(F("[slaveState] "));
+    Serial.print(slaveState);
+    Serial.print(F(" -> "));
+    Serial.println(newState);
+  }
+  slaveState = newState;
+}
+
+// ================= 转发指令到从设备（透传，非阻塞） =================
+// 单手-右手模式和双手模式均使用此函数转发
 void forwardToSlave(uint8_t *cmd) {
-  Serial.print(F("Forwarding cmd: "));
-  if (!dualMode || !IS_MASTER) return;
+  // 仅主设备可转发，从设备直接返回
+  if (!IS_MASTER) return;
+
+  // ---- 转发日志 ----
+  Serial.print(F("转发指令: 0x"));
+  Serial.print(cmd[0], HEX);
+  Serial.print(F(" 0x"));
+  Serial.print(cmd[1], HEX);
+  Serial.print(F(" 0x"));
+  Serial.print(cmd[2], HEX);
+  Serial.print(F(" 0x"));
+  Serial.println(cmd[3], HEX);
+
+  // ---- 乐谱数据转发时更新从机状态（非阻塞，从机端自行停止播放） ----
+  if (cmd[0] == 0xFB) {
+    // 从机收到 0xFB 会立即停止播放（优先级最高），主机无需阻塞等待
+    setSlaveState(SLAVE_RECEIVING);
+  }
+
   bt.write(cmd, 4);
 }
 
@@ -798,11 +866,27 @@ void handleMasterTasks() {
     }
   }
 
-  // 【主设备】定期发起校时（30秒间隔）
-  if (!timeSynced || microsElapsed(lastSyncTime) > SYNC_INTERVAL) {
+  // 【主设备】定期发起校时（仅双手模式，30秒间隔）
+  // 单手模式下不执行校时，无论 scoreTarget 是本地还是从机
+  if (dualMode && (!timeSynced || microsElapsed(lastSyncTime) > SYNC_INTERVAL)) {
     if (masterTimingState == MT_IDLE) {
       startTimingSync();
     }
+  }
+
+  // ---- 从机状态超时监控（非阻塞） ----
+  // 接收中超过 2 秒未完成，判定超时，重置状态
+  static unsigned long slaveReceiveStartTime = 0;
+  if (slaveState == SLAVE_RECEIVING) {
+    if (slaveReceiveStartTime == 0) {
+      slaveReceiveStartTime = micros();
+    } else if (microsElapsed(slaveReceiveStartTime) > 2000000UL) {
+      Serial.println(F("从机乐谱接收超时，重置状态"));
+      setSlaveState(SLAVE_IDLE);
+      slaveReceiveStartTime = 0;
+    }
+  } else {
+    slaveReceiveStartTime = 0;
   }
 }
 
@@ -1008,11 +1092,11 @@ void parseCommand(uint8_t *cmd) {
           uint8_t internalAction = 0;
           uint8_t param = 0;
           switch (action) {
-            case 0: internalAction = 0x04; param = dataPacketParam; break;
-            case 1: internalAction = 0x01; param = 0; break;
-            case 2: internalAction = 0x02; param = 0; break;
-            case 3: internalAction = 0x03; param = 0; break;
-            case 4: internalAction = 0x05; param = dataPacketParam; break; // EEPROM 播放
+            case 0: internalAction = 0x04; param = dataPacketParam; break;  // SRAM 播放
+            case 1: internalAction = 0x01; param = 0; break;               // 暂停
+            case 2: internalAction = 0x02; param = 0; break;               // 继续
+            case 3: internalAction = 0x03; param = 0; break;               // 停止
+            case 4: internalAction = 0x05; param = dataPacketParam; break;  // EEPROM 分区播放
             default: return;
           }
           // 【从设备】主设备绝对时刻 + 校时偏移 = 本地执行时刻
@@ -1028,76 +1112,152 @@ void parseCommand(uint8_t *cmd) {
       return;
     }
 
-    // ---- 原有指令 ----
+    // ---- 控制指令 ----
     switch (b1) {
       case 0x00: // 停止
-        if (IS_MASTER && dualMode) {
-          // 【主设备】延迟同步停止
-          unsigned long execTime = micros() + 200000ULL;
-          scheduleFutureAction(execTime, 0x03, 0);
-          sendControlData(3, execTime, 0);
+        if (IS_MASTER) {
+          if (dualMode) {
+            // 双手模式：本地延迟执行 + 同步转发给从机（附时间戳）
+            unsigned long execTime = micros() + 200000ULL;
+            scheduleFutureAction(execTime, 0x03, 0);
+            sendControlData(3, execTime, 0);
+            setSlaveState(SLAVE_IDLE);
+          } else if (scoreTarget == TARGET_LOCAL) {
+            // 单手-左手：本地执行
+            stopPlayback();
+          } else {
+            // 单手-右手：转发给从机
+            forwardToSlave(cmd);
+            setSlaveState(SLAVE_IDLE);
+          }
         } else {
           stopPlayback();
         }
         break;
       case 0x01: // 暂停
         Serial.println(F("暂停"));
-        if (IS_MASTER && dualMode) {
-          // 【主设备】延迟同步暂停
-          unsigned long execTime = micros() + 200000ULL;
-          scheduleFutureAction(execTime, 0x01, 0);
-          sendControlData(1, execTime, 0);
+        if (IS_MASTER) {
+          if (dualMode) {
+            // 双手模式：本地延迟执行 + 同步转发
+            unsigned long execTime = micros() + 200000ULL;
+            scheduleFutureAction(execTime, 0x01, 0);
+            sendControlData(1, execTime, 0);
+            setSlaveState(SLAVE_PAUSED);
+          } else if (scoreTarget == TARGET_LOCAL) {
+            // 单手-左手：本地执行
+            waitingLoop = false;      // 终止循环等待
+            waitingLoopSource = 0;
+            isPause = true;
+          } else {
+            // 单手-右手：转发给从机
+            forwardToSlave(cmd);
+            setSlaveState(SLAVE_PAUSED);
+          }
         } else {
+          // 从机：本地执行
+          waitingLoop = false;        // 终止循环等待
+          waitingLoopSource = 0;
           isPause = true;
         }
         break;
       case 0x02: // 继续
         Serial.println(F("继续"));
-        if (IS_MASTER && dualMode) {
-          // 【主设备】延迟同步继续
-          unsigned long execTime = micros() + 200000ULL;
-          scheduleFutureAction(execTime, 0x02, 0);
-          sendControlData(2, execTime, 0);
+        if (IS_MASTER) {
+          if (dualMode) {
+            // 双手模式：本地延迟执行 + 同步转发
+            unsigned long execTime = micros() + 200000ULL;
+            scheduleFutureAction(execTime, 0x02, 0);
+            sendControlData(2, execTime, 0);
+            setSlaveState(SLAVE_PLAYING);
+          } else if (scoreTarget == TARGET_LOCAL) {
+            // 单手-左手：本地执行
+            isPause = false;
+          } else {
+            // 单手-右手：转发给从机
+            forwardToSlave(cmd);
+            setSlaveState(SLAVE_PLAYING);
+          }
         } else {
           isPause = false;
         }
         break;
-      case 0x04: // SRAM 播放
+      case 0x03: // 系统复位
+        if (IS_MASTER) {
+          if (dualMode) {
+            // 双手模式：本地立即执行 + 同步转发
+            systemReset();
+            forwardToSlave(cmd);
+            setSlaveState(SLAVE_IDLE);
+          } else if (scoreTarget == TARGET_LOCAL) {
+            // 单手-左手：本地执行
+            systemReset();
+          } else {
+            // 单手-右手：转发给从机
+            forwardToSlave(cmd);
+            setSlaveState(SLAVE_IDLE);
+          }
+        } else {
+          // 从机：本地执行
+          systemReset();
+        }
+        break;
+      case 0x04: // SRAM 播放（仅支持 b2=0）
+        if (b2 != 0) {
+          Serial.println(F("0x04 仅支持 SRAM (b2=0)，EEPROM 请使用 0x05"));
+          break;
+        }
         Serial.println(F("SRAM播放"));
-        if (IS_MASTER && dualMode) {
-          // 【主设备】延迟同步播放
-          unsigned long execTime = micros() + 500000ULL;
-          scheduleFutureAction(execTime, 0x04, b2);
-          sendControlData(0, execTime, b2);
+        if (IS_MASTER) {
+          if (dualMode) {
+            // 双手模式：本地延迟执行 + 同步转发（播放预留 500ms 缓冲）
+            unsigned long execTime = micros() + 500000ULL;
+            scheduleFutureAction(execTime, 0x04, 0);
+            sendControlData(0, execTime, 0);
+            setSlaveState(SLAVE_PLAYING);
+          } else if (scoreTarget == TARGET_LOCAL) {
+            // 单手-左手：本地执行
+            startPlayback();
+          } else {
+            // 单手-右手：转发给从机
+            forwardToSlave(cmd);
+            setSlaveState(SLAVE_PLAYING);
+          }
         } else {
-          selectPlaysource(b2);
+          startPlayback();
         }
         break;
-      case 0x05: // EEPROM 分区播放（b2=0~7 直接对应分区号）
+      case 0x05: // EEPROM 分区播放（b2 直接对应分区号 0~7）
+        if (b2 > 7) {
+          Serial.println(F("0x05 分区号超出范围 (0~7)"));
+          break;
+        }
         Serial.print(F("EEPROM播放分区: ")); Serial.println(b2);
-        if (b2 > 7) { Serial.println(F("分区号超范围")); break; }
-        if (IS_MASTER && dualMode) {
-          // 【主设备】延迟同步播放，actionType=4 表示 EEPROM 播放
-          unsigned long execTime = micros() + 500000ULL;
-          scheduleFutureAction(execTime, 0x05, b2);
-          sendControlData(4, execTime, b2);
+        if (IS_MASTER) {
+          if (dualMode) {
+            // 双手模式：本地延迟执行 + 同步转发（播放预留 500ms 缓冲）
+            unsigned long execTime = micros() + 500000ULL;
+            scheduleFutureAction(execTime, 0x05, b2);
+            sendControlData(4, execTime, b2);
+            setSlaveState(SLAVE_PLAYING);
+          } else if (scoreTarget == TARGET_LOCAL) {
+            // 单手-左手：本地执行
+            playEepromPartition(b2);
+          } else {
+            // 单手-右手：转发给从机
+            forwardToSlave(cmd);
+            setSlaveState(SLAVE_PLAYING);
+          }
         } else {
-          // 单手模式或从机：直接启动 EEPROM 播放
-          stopPlayback();
-          isPause = false;
-          eepromPlaying = true;
-          eepromReadBase = eepromBases[b2];
-          eepromReadAddr = eepromReadBase;
-          eepromCmdReady = false;
-          eepromCurTick = 0;
-          eepromCurMotor = 0;
-          eepromLastTick = 0;
-          eepromSectionStart = playbackAnchorTime();
-          eepromPauseStart = 0;
-          eepromTotalPause = 0;
+          playEepromPartition(b2);
         }
         break;
-      case 0x10: clearScore(); break;
+      case 0x10:
+        clearScore();
+        // 与 0x12 一致：双手模式或目标为从机时转发，保证从机 SRAM 同步清空
+        if (IS_MASTER && (dualMode || scoreTarget == TARGET_SLAVE)) {
+          forwardToSlave(cmd);
+        }
+        break;
       case 0x11:
         if (b2 <= 7) {
           if (eepromWriting) flushEepromCache();
@@ -1107,6 +1267,10 @@ void parseCommand(uint8_t *cmd) {
           eepromCacheLen = 0;
           Serial.print(F("EEPROM write mode: partition "));
           Serial.println(b2);
+        }
+        // 双手模式或目标为从机时转发
+        if (IS_MASTER && (dualMode || scoreTarget == TARGET_SLAVE)) {
+          forwardToSlave(cmd);
         }
         break;
       case 0x12:
@@ -1124,18 +1288,69 @@ void parseCommand(uint8_t *cmd) {
         } else {
           Serial.println(F("Invalid partition number"));
         }
+        // 双手模式或目标为从机时转发
+        if (IS_MASTER && (dualMode || scoreTarget == TARGET_SLAVE)) {
+          forwardToSlave(cmd);
+        }
         break;
-      case 0x20: switchMode(b2); break;
+      // ---- 统一目标设备切换指令（全场景通用） ----
+      // 0xF9 0x24 0x00 0x00 → 目标=左手(主机)
+      // 0xF9 0x24 0x01 0x00 → 目标=右手(从机)
+      case 0x24:
+        if (b2 == 0x00) {
+          scoreTarget = TARGET_LOCAL;
+          Serial.println(F("目标设备: 左手(主机)"));
+        } else if (b2 == 0x01) {
+          scoreTarget = TARGET_SLAVE;
+          Serial.println(F("目标设备: 右手(从机)"));
+        }
+        break;
+      case 0x20:
+        switchMode(b2);
+        // 模式是左右手全局状态：单/双手模式都必须转发给从机，保证主从模式一致。
+        // 特别是"单手→双手"切换时若按 dualMode 条件转发，切换前 dualMode 仍为 false
+        // 会漏转发，导致从机收不到校时、主从模式不一致。
+        if (IS_MASTER) {
+          forwardToSlave(cmd);
+        }
+        break;
       case 0x21:
         beatsPerBar = (b2 >> 4) & 0x0F;
         if (beatsPerBar == 0) beatsPerBar = 4;
         recalcTiming();
+        // 双手模式或目标为从机时转发
+        if (IS_MASTER && (dualMode || scoreTarget == TARGET_SLAVE)) {
+          forwardToSlave(cmd);
+        }
         break;
       case 0x22:
         if (b2 == 0) ticksPerBeat = 32;
         else if (b2 == 1) ticksPerBeat = 16;
         else if (b2 == 2) ticksPerBeat = 8;
         recalcTiming();
+        // 双手模式或目标为从机时转发
+        if (IS_MASTER && (dualMode || scoreTarget == TARGET_SLAVE)) {
+          forwardToSlave(cmd);
+        }
+        break;
+      case 0x25: // 马达强度设置
+        {
+          uint8_t pinIndex = b2;
+          if (pinIndex < 5) {
+            motorIntensity[pinIndex] = b3;
+            Serial.print(F("马达强度: pin"));
+            Serial.print(pinIndex);
+            Serial.print(F("="));
+            Serial.println(b3);
+          } else {
+            Serial.println(F("0x25 引脚索引超出范围 (0~4)"));
+          }
+          // 强度指令只在显式目标为从机（右手）时转发：双手模式下不自动转发，
+          // 保证左右手强度可以各自独立设置（选左手→本地执行，选右手→转发给右手）。
+          if (IS_MASTER && scoreTarget == TARGET_SLAVE) {
+            forwardToSlave(cmd);
+          }
+        }
         break;
       default: break;
     }
@@ -1145,9 +1360,11 @@ void parseCommand(uint8_t *cmd) {
     if (newBpm >= 1 && newBpm <= 300) {
       bpm = newBpm;
       recalcTiming();
-      if (IS_MASTER && dualMode) forwardToSlave(cmd);
+      // 双手模式或单手-右手模式，转发 BPM 给从机
+      if (IS_MASTER && (dualMode || scoreTarget == TARGET_SLAVE)) forwardToSlave(cmd);
     }
   } else if (sync == 0xFB) {
+    // ---- XOR 校验：仅乐谱数据有校验，校验失败则丢弃 ----
     if (enableXorCheck){
       if (!verifyXor(sync, b1, b2, b3)) {
         Serial.println(F("乐谱数据校验失败，丢弃"));
@@ -1155,25 +1372,79 @@ void parseCommand(uint8_t *cmd) {
       }
     }
     Serial.println(F("乐谱数据"));
-    if (eepromWriting) {
-      // 【EEPROM离线播放】写入缓存
-      if (eepromCacheLen + 2 > EEPROM_CACHE_SIZE) {
-        flushEepromCache();
-      }
-      eepromCache[eepromCacheLen++] = b1;
-      eepromCache[eepromCacheLen++] = b2;
 
-      if (b1 == 0xFF && b2 == 0x00) {
-        flushEepromCache();
-        eepromWriting = false;
-        Serial.print(F("EEPROM writing finished. Bytes written: "));
-        Serial.println(eepromWriteAddr - eepromWriteBase);
+    if (IS_MASTER) {
+      // ---- 主机：根据 scoreTarget 决定乐谱保存目标 ----
+      if (scoreTarget == TARGET_LOCAL) {
+        // 目标设备为本地（左手）：主机本地保存
+        if (eepromWriting) {
+          // 【EEPROM离线播放】写入缓存
+          if (eepromCacheLen + 2 > EEPROM_CACHE_SIZE) {
+            flushEepromCache();
+          }
+          eepromCache[eepromCacheLen++] = b1;
+          eepromCache[eepromCacheLen++] = b2;
+          if (b1 == 0xFF && b2 == 0x00) {
+            flushEepromCache();
+            eepromWriting = false;
+            Serial.print(F("EEPROM writing finished. Bytes written: "));
+            Serial.println(eepromWriteAddr - eepromWriteBase);
+          }
+        } else {
+          // 【SRAM内存播放】存入缓冲区
+          storeScoreData(b1, b2);
+        }
+      } else {
+        // 目标设备为从机（右手）：主机转发给从机，透传保留原始 b3 校验字节
+        // [调试] 打印主机转发的乐谱数据包完整内容
+        Serial.print(F("[M->S] 0xFB转发: b1=0x"));
+        Serial.print(b1, HEX);
+        Serial.print(F(" b2=0x"));
+        Serial.print(b2, HEX);
+        Serial.print(F(" b3=0x"));
+        Serial.println(b3, HEX);
+        forwardToSlave(cmd);
+        // 主机推断从机状态：收到结束标志则为就绪，否则为接收中
+        if (b1 == 0xFF && b2 == 0x00) {
+          setSlaveState(SLAVE_READY);
+        }
       }
     } else {
-      // 【SRAM内存播放】存入缓冲区
-      storeScoreData(b1, b2);
+      // ---- 从机：直接保存乐谱数据 ----
+      // [调试] 打印从机接收的乐谱数据包完整内容
+      Serial.print(F("[S<-M] 0xFB接收: b1=0x"));
+      Serial.print(b1, HEX);
+      Serial.print(F(" b2=0x"));
+      Serial.print(b2, HEX);
+      Serial.print(F(" b3=0x"));
+      Serial.println(b3, HEX);
+      // 从机指令执行优先级：收到乐谱数据必须立即停止当前播放
+      if (isPlaying || eepromPlaying || waitingLoop) {
+        stopPlayback();
+        Serial.println(F("从机: 收到乐谱，停止当前播放"));
+      }
+      if (isPause) {
+        isPause = false;
+      }
+
+      if (eepromWriting) {
+        // 【EEPROM离线播放】写入缓存
+        if (eepromCacheLen + 2 > EEPROM_CACHE_SIZE) {
+          flushEepromCache();
+        }
+        eepromCache[eepromCacheLen++] = b1;
+        eepromCache[eepromCacheLen++] = b2;
+        if (b1 == 0xFF && b2 == 0x00) {
+          flushEepromCache();
+          eepromWriting = false;
+          Serial.print(F("EEPROM writing finished. Bytes written: "));
+          Serial.println(eepromWriteAddr - eepromWriteBase);
+        }
+      } else {
+        // 【SRAM内存播放】存入缓冲区
+        storeScoreData(b1, b2);
+      }
     }
-    if (IS_MASTER && dualMode) forwardToSlave(cmd);
   }
 }
 
@@ -1181,7 +1452,7 @@ void parseCommand(uint8_t *cmd) {
 void setup() {
   for (int i = 0; i < numLeds; i++) {
     pinMode(ledPins[i], OUTPUT);
-    digitalWrite(ledPins[i], LOW);
+    analogWrite(ledPins[i], 0);
   }
   Serial.begin(9600);  // 修复：必须先初始化 Serial 再打印
   bt.begin(9600);
