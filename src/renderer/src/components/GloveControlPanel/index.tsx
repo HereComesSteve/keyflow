@@ -27,6 +27,9 @@ import {
   INTENSITY_MAX,
   INTENSITY_FINGER_MIN,
   INTENSITY_FINGER_MAX,
+  buildJumpBarCommand,
+  JUMP_BAR_MIN,
+  JUMP_BAR_MAX,
 } from '../../lib/bluetooth/glove-commands';
 import { useTranslation } from '../../lib/i18n/useTranslation';
 import { formatMessage } from '../../lib/i18n/format';
@@ -121,6 +124,10 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
   const [strengthFinger, setStrengthFinger] = useState(INTENSITY_FINGER_MIN);
   const [intensityInput, setIntensityInput] = useState('128');
   const [intensityStatus, setIntensityStatus] = useState('');
+
+  // 小节跳转：小节号输入（1 基）、错误提示。目标设备同样复用 target 状态。
+  const [jumpBarInput, setJumpBarInput] = useState('1');
+  const [jumpStatus, setJumpStatus] = useState('');
 
   // 清除乐谱：目标存储、分区、确认弹窗开关。
   const [clearTarget, setClearTarget] = useState<'sram' | 'eeprom'>('sram');
@@ -523,6 +530,22 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     for (let finger = INTENSITY_FINGER_MIN; finger <= INTENSITY_FINGER_MAX; finger++) {
       if (!(await sendIntensity(finger, intensity))) return;
     }
+  };
+
+  // 小节跳转：校验 1~255 → 发送前先设目标 F9 24 → 发 F9 26 [小节号] 00。
+  // 与强度区共用 ensureIntensityTarget（目标设备指令 F9 24 对所有指令通用）。
+  const handleJumpBar = async (): Promise<void> => {
+    const bar = Number(jumpBarInput);
+    if (!Number.isFinite(bar) || bar < JUMP_BAR_MIN || bar > JUMP_BAR_MAX) {
+      setJumpStatus(t.glove.jumpRangeError);
+      addGloveLog(`[${formatTimestamp(new Date())}] ${t.glove.jumpRangeError}`);
+      return;
+    }
+    setJumpStatus('');
+    if (!(await ensureIntensityTarget())) return;
+    const handLabel = target === 'left' ? t.glove.targetLeft : t.glove.targetRight;
+    const desc = formatMessage(t.glove.logJumpBar, { value: bar, hand: handLabel });
+    await sendCommand(buildJumpBarCommand(bar), desc);
   };
 
   // 清除乐谱：先检查连接，再弹窗二次确认，确认后发送清除指令。
@@ -1341,6 +1364,67 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
             <div style={{ fontSize: '0.8125rem', color: '#dc2626' }}>{intensityStatus}</div>
           )}
           <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{t.glove.intensityHint}</div>
+        </div>
+
+        {/* ⏩ 小节跳转区 */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>⏩ {t.glove.jumpSection}</div>
+
+          {/* 目标设备（左右手）：与强度/写入区共用 target 状态 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.writeTargetLabel}</span>
+            <button
+              type="button"
+              onClick={handleTargetLeft}
+              disabled={controlsDisabled}
+              style={commandButtonStyle(target === 'left')}
+            >
+              {t.glove.targetLeft}
+            </button>
+            <button
+              type="button"
+              onClick={handleTargetRight}
+              disabled={controlsDisabled}
+              style={commandButtonStyle(target === 'right')}
+            >
+              {t.glove.targetRight}
+            </button>
+          </div>
+
+          {/* 小节号输入 + 跳转按钮 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.jumpBarLabel}</span>
+            <input
+              type="number"
+              value={jumpBarInput}
+              onChange={(e) => setJumpBarInput(e.target.value)}
+              disabled={controlsDisabled}
+              min={JUMP_BAR_MIN}
+              max={JUMP_BAR_MAX}
+              style={{
+                width: '72px',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                border: '1px solid #d1d5db',
+                backgroundColor: '#fff',
+                color: '#374151',
+                fontSize: '0.8125rem',
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleJumpBar}
+              disabled={controlsDisabled}
+              style={{ ...commandButtonStyle(), backgroundColor: '#0d9488', color: 'white', borderColor: '#0d9488' }}
+            >
+              {t.glove.jumpButton}
+            </button>
+          </div>
+
+          {jumpStatus && (
+            <div style={{ fontSize: '0.8125rem', color: '#dc2626' }}>{jumpStatus}</div>
+          )}
+          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{t.glove.jumpHint}</div>
         </div>
 
         {/* 🗑 清除乐谱区 */}

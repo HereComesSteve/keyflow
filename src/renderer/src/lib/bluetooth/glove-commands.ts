@@ -200,3 +200,20 @@ export function buildIntensityCommand(finger: number, intensity: number): number
   );
   return [0xf9, 0x25, fingerClamped - INTENSITY_FINGER_MIN, intensityClamped];
 }
+
+/* ===================== 小节跳转 ===================== */
+
+/** 小节跳转范围（1 基。固件 SRAM 上限 32、EEPROM 上限 128，超出由固件拒绝，UI 放 1~255）。 */
+export const JUMP_BAR_MIN = 1;
+export const JUMP_BAR_MAX = 255;
+
+/**
+ * 构建小节跳转指令: F9 26 [小节号1基] 00。
+ *
+ * 固定 4 字节、无 XOR。跳到指定小节第一条指令，并从该小节 tick=0 重新播放。
+ * 目标设备（左手本地 / 右手转发）由调用方先发 F9 24 00/01 决定，本函数只组装指令。
+ */
+export function buildJumpBarCommand(bar: number): number[] {
+  const barClamped = Math.max(JUMP_BAR_MIN, Math.min(JUMP_BAR_MAX, Math.trunc(bar)));
+  return [0xf9, 0x26, barClamped, 0x00];
+}

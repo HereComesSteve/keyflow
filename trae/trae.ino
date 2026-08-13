@@ -45,6 +45,18 @@ unsigned long sectionStartTime = 0; // 当前小节的起始毫秒
 uint16_t currentCmdIndex = 0;     // 当前执行到的指令索引
 uint8_t currentMotorState = 0;    // 当前所有马达的状态，用于暂停恢复
 
+// ---- 单调绝对 tick 播放（时序优化）----
+// 播放时间基准（sectionStartTime）只在播放开始/恢复/跳转时设置，播放中永不偏移。
+// 每条指令的绝对 tick（从播放起点累计）预计算到 sramAbsTicks，调度只比较
+// elapsedTicks >= 绝对tick，彻底避免旧"回绕时偏移时间"的无符号下溢缺陷
+// （跨小节那一帧剩余指令会瞬间全部执行）。
+uint32_t sramAbsTicks[MAX_CMDS];      // 每条 SRAM 指令的绝对 tick
+uint8_t sramBarStartIndex[MAX_CMDS];  // 每个小节第一条指令的下标（最多 32 个）
+uint8_t sramBarCount = 0;             // SRAM 乐谱的小节数
+// 当前播放位置的小节起点（跳转后 = 目标小节起点）。调度时把 sramAbsTicks（全曲绝对）
+// 减去它转成"相对当前播放位置"，配合 sectionStartTime 清零，避免跳转回退时间产生负数。
+uint32_t sramPlayFromAbsTick = 0;
+
 // ================= 运行时模式（可切换，不保存） =================
 bool dualMode = 0;           // true=双手模式, false=单手模式（默认双手）
 
@@ -82,11 +94,17 @@ uint16_t eepromReadBase = 0;          // 播放基地址（分区起始）
 uint16_t eepromReadAddr = 0;          // 当前读取地址
 uint8_t eepromCurTick = 0;            // 当前指令的节拍位置
 uint8_t eepromCurMotor = 0;           // 当前指令的马达控制
-uint8_t eepromLastTick = 0;           // 上一条指令的节拍位置（用于检测小节）
+uint8_t eepromLastTick = 0;           // 上一条指令的节拍位置（用于检测小节回绕）
+uint32_t eepromAbsTick = 0;           // 当前指令的绝对 tick（从播放起点累计，单调递增）
 bool eepromCmdReady = false;          // 当前指令缓存是否有效
-unsigned long eepromSectionStart = 0; // EEPROM 播放的当前小节起始时刻
+unsigned long eepromSectionStart = 0; // EEPROM 播放的起始时刻（播放中不偏移）
 unsigned long eepromPauseStart = 0;   // EEPROM 暂停时刻（与 isPause 配合）
 unsigned long eepromTotalPause = 0;   // EEPROM 暂停累计时长
+
+// ---- EEPROM 小节跳转映射 ----
+#define MAX_BARS 128              // 支持跳转的最大小节数（内存限制，每小节 2 字节）
+uint16_t eepromBarStartIndex[MAX_BARS]; // 每个小节第一条指令的 EEPROM 地址
+uint8_t eepromBarCount = 0;       // EEPROM 乐谱的小节数
 
 // ================= EEPROM 写入状态 =================
 bool eepromWriting = false;           // 是否处于 EEPROM 写入模式
@@ -99,7 +117,7 @@ uint8_t beatsPerBar = 4;          // 默认 4/4 拍
 uint8_t ticksPerBeat = 32;        // 每拍拆成 32 个 tick
 uint32_t tickDurationUs;          // 每个 tick 的微秒数
 uint32_t barDurationUs;   // 小节时长（微秒）
-//uint32_t totalTicksPerBar;        // 每小节总tick数，recalcTiming中预计算
+uint16_t totalTicksPerBar = 128;  // 每小节总 tick 数（Tm = beatsPerBar × ticksPerBeat），recalcTiming 更新
 
 // ================= 校验控制 =================
 bool enableXorCheck = false;  // true=开启校验, false=关闭校验（调试模式）
@@ -213,6 +231,7 @@ void recalcTiming() {
   tickDurationUs = beatDurationUs / ticksPerBeat;  // 修复：此前未赋值导致 tick 除零
   if (tickDurationUs == 0) tickDurationUs = 1;     // 防止除零
   barDurationUs = beatsPerBar * beatDurationUs;   // 微秒
+  totalTicksPerBar = beatsPerBar * ticksPerBeat;  // 每小节总 tick 数（Tm），绝对 tick 换算用
 }
 
 // 【双手模式/从设备】播放锚点时刻：主设备用本地 micros，从设备叠加校时偏移
@@ -248,6 +267,28 @@ void startPlayback() {
   Serial.print(F("[PLAY] totalCmds="));
   Serial.println(totalCmds);
   if (totalCmds == 0) return;
+
+  // 预计算每条指令的绝对 tick（单调时间轴）与小节映射：
+  // - 绝对 tick = 小节号 × totalTicksPerBar + 小节内 tick，tick 变小（回绕）表示跨小节
+  // - sramBarStartIndex[bar] 记录每个小节第一条指令的下标，供 0x26 跳转使用
+  uint32_t absT = cmdTicks[0];
+  sramAbsTicks[0] = absT;
+  sramBarCount = 0;
+  sramBarStartIndex[0] = 0;
+  for (uint16_t i = 1; i < totalCmds; i++) {
+    if (cmdTicks[i] < cmdTicks[i - 1]) {
+      // 跨小节：补上"本小节剩余部分 + 新小节内位置"
+      absT += (uint32_t)totalTicksPerBar - cmdTicks[i - 1] + cmdTicks[i];
+      sramBarCount++;
+      if (sramBarCount < MAX_CMDS) sramBarStartIndex[sramBarCount] = i;
+    } else {
+      absT += cmdTicks[i] - cmdTicks[i - 1];
+    }
+    sramAbsTicks[i] = absT;
+  }
+  sramBarCount++;  // 小节总数 = 回绕次数 + 1
+  sramPlayFromAbsTick = 0;  // 从头播放：播放位置 = 第 1 小节起点
+
   currentCmdIndex = 0;
   sectionStartTime = playbackAnchorTime();
   isPlaying = true;
@@ -265,6 +306,7 @@ void stopPlayback() {
   waitingLoopSource = 0;
   eepromPlaying = false;
   eepromCmdReady = false;
+  eepromAbsTick = 0;   // 绝对 tick 归零（下次 playEepromPartition 重新累计）
   isPause = false;
   pauseStartTime = 0;
   totalPauseTime = 0;
@@ -313,6 +355,7 @@ void schedulePlayback() {
         eepromCurTick = 0;
         eepromCurMotor = 0;
         eepromLastTick = 0;
+        eepromAbsTick = 0;   // 绝对 tick 归零（从头重播）
         eepromSectionStart = playbackAnchorTime();
         eepromPauseStart = 0;
         eepromTotalPause = 0;
@@ -352,16 +395,10 @@ void schedulePlayback() {
 
   uint8_t cmdsThisFrame = 0;
   while (currentCmdIndex < totalCmds && cmdsThisFrame < MAX_CMDS_PER_FRAME) {
-    uint8_t cmdTick = cmdTicks[currentCmdIndex];
-
-    // 小节回绕检测
-    if (currentCmdIndex > 0 && cmdTick < cmdTicks[currentCmdIndex - 1]) {
-      sectionStartTime += barDurationUs;
-      elapsedUs = (uint64_t)(now - sectionStartTime);
-      elapsedTicks = elapsedUs / tickDurationUs;
-    }
-
-    if (elapsedTicks >= cmdTick) {
+    // 单调绝对 tick 比较：elapsedTicks 从"当前播放位置起点"单调增长，
+    // 指令位置 = 全曲绝对 tick − 当前位置小节起点（sramPlayFromAbsTick）。
+    // 跳转时 sectionStartTime 清零 + 更新 sramPlayFromAbsTick，不再回退时间（无负数钳位）。
+    if (elapsedTicks >= (uint32_t)(sramAbsTicks[currentCmdIndex] - sramPlayFromAbsTick)) {
       executeCommand(cmdMotors[currentCmdIndex]);
       currentCmdIndex++;
       cmdsThisFrame++;
@@ -427,7 +464,6 @@ void eepromSchedule() {
       return;
     }
     eepromCmdReady = true;
-    eepromLastTick = eepromCurTick;
   }
 
   // 【修复5】EEPROM 播放进度同样跟随主机统一时间基准
@@ -437,15 +473,9 @@ void eepromSchedule() {
 
   uint8_t cmdsThisFrame = 0;
   while (cmdsThisFrame < MAX_CMDS_PER_FRAME) {
-    // 小节回绕检测
-    if (eepromCurTick < eepromLastTick) {
-      eepromSectionStart += barDurationUs;
-      elapsedUs = (uint64_t)(now - eepromSectionStart);
-      elapsedTicks = elapsedUs / tickDurationUs;
-    }
-    eepromLastTick = eepromCurTick;
-
-    if (elapsedTicks >= eepromCurTick) {
+    // 单调绝对 tick 比较：eepromAbsTick 在 eepromFetchNext 时递增维护，
+    // 时间基准 eepromSectionStart 播放中不偏移，无回绕下溢缺陷。
+    if (elapsedTicks >= eepromAbsTick) {
       Serial.print(F("EEPROM exec: tick="));
       Serial.print(eepromCurTick);
       Serial.print(F(" motor=0x"));
@@ -607,6 +637,14 @@ bool eepromFetchNext() {
     Serial.println(F("EEPROM: end marker found"));
     return false;
   }
+  // 单调绝对 tick 维护：与上一条指令 tick 比较，回绕（变小）表示跨小节。
+  // 初始 eepromLastTick=0，第一条指令直接取自身 tick（tick<0 恒假）。
+  if (tick < eepromLastTick) {
+    eepromAbsTick += (uint32_t)totalTicksPerBar - eepromLastTick + tick;
+  } else {
+    eepromAbsTick += (uint32_t)tick - eepromLastTick;
+  }
+  eepromLastTick = tick;
   eepromCurTick = tick;
   eepromCurMotor = motor;
   eepromReadAddr += 2;
@@ -691,10 +729,30 @@ void playEepromPartition(uint8_t partition) {
     eepromCurTick = 0;
     eepromCurMotor = 0;
     eepromLastTick = 0;
+    eepromAbsTick = 0;
     eepromSectionStart = playbackAnchorTime();
     eepromPauseStart = 0;
     eepromTotalPause = 0;
     isPause = false;
+
+    // 构建小节跳转映射：扫描分区，tick 回绕（变小）处为新小节第一条指令。
+    // 每条指令 2 字节（tick+motor），哨兵 prevScanTick=0xFF 保证第一条算新小节。
+    eepromBarCount = 0;
+    uint16_t scanAddr = eepromReadBase;
+    uint8_t prevScanTick = 0xFF;
+    bool scanFirst = true;
+    while (scanAddr + 2 <= eepromReadBase + EEPROM_SECTION_SIZE && eepromBarCount < MAX_BARS) {
+      uint8_t t = eepromReadByte(scanAddr);
+      uint8_t m = eepromReadByte(scanAddr + 1);
+      if (t == 0xFF && m == 0x00) break;  // 结束标记
+      if (scanFirst || t < prevScanTick) {
+        eepromBarStartIndex[eepromBarCount++] = scanAddr;
+      }
+      prevScanTick = t;
+      scanFirst = false;
+      scanAddr += 2;
+    }
+
     Serial.print(F("EEPROM play partition: "));
     Serial.println(partition);
   }
@@ -1350,6 +1408,71 @@ void parseCommand(uint8_t *cmd) {
           if (IS_MASTER && scoreTarget == TARGET_SLAVE) {
             forwardToSlave(cmd);
           }
+        }
+        break;
+      case 0x26: // 小节跳转（b2 = 1 基小节号）
+        {
+          // 跳到指定小节第一条指令，从该小节 tick=0 开始播放。
+          // 双手模式或目标为从机时转发（从机本地执行同样的跳转）。
+          if (IS_MASTER && (dualMode || scoreTarget == TARGET_SLAVE)) {
+            forwardToSlave(cmd);
+          }
+          uint8_t targetBar = b2;  // 1 基
+          if (targetBar < 1) {
+            Serial.println(F("0x26 小节号从 1 开始"));
+            break;
+          }
+          // ---- SRAM 播放中：跳转 SRAM 乐谱 ----
+          if (isPlaying && !eepromPlaying) {
+            if (targetBar > sramBarCount) {
+              Serial.println(F("0x26 SRAM 小节号超出范围"));
+              break;
+            }
+            currentCmdIndex = sramBarStartIndex[targetBar - 1];
+            // 起始小节偏移方案：不回退时间（避免上电时长不足时负数钳位），
+            // 而是记录"播放位置的小节起点"并把时间清零重新数。
+            sramPlayFromAbsTick = (uint32_t)(targetBar - 1) * totalTicksPerBar;
+            unsigned long nowUs = playbackAnchorTime();
+            sectionStartTime = nowUs;
+            // 保持暂停状态：若在暂停中，仅把暂停起点更新为当前时刻，
+            // 使恢复补偿（sectionStartTime += totalPause）只补"跳转后到恢复"的时长。
+            if (isPause) {
+              pauseStartTime = nowUs;
+            }
+            // 跳转 = 重新开始播放：熄灭当前所有灯，避免跳转前亮的灯残留
+            for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
+            currentMotorState = 0;
+            Serial.print(F("0x26 SRAM 跳转到小节 "));
+            Serial.println(targetBar);
+            break;
+          }
+          // ---- EEPROM 播放中：跳转 EEPROM 乐谱 ----
+          if (eepromPlaying) {
+            if (targetBar > eepromBarCount) {
+              Serial.println(F("0x26 EEPROM 小节号超出范围"));
+              break;
+            }
+            eepromReadAddr = eepromBarStartIndex[targetBar - 1];
+            eepromCmdReady = false;  // 让调度器重新取指令
+            eepromLastTick = 0;      // 防误判回绕
+            // 起始小节偏移方案：eepromAbsTick 从 0 相对累加（fetch 时维护），
+            // 时间基准清零（elapsedTicks 也从 0 数），不回退时间，无负数钳位。
+            eepromAbsTick = 0;
+            unsigned long nowUs = playbackAnchorTime();
+            eepromSectionStart = nowUs;
+            // 保持暂停状态：若在暂停中，仅把暂停起点更新为当前时刻，
+            // 使恢复补偿（eepromSectionStart += eepromTotalPause）只补"跳转后到恢复"的时长。
+            if (isPause) {
+              eepromPauseStart = nowUs;
+            }
+            // 跳转 = 重新开始播放：熄灭当前所有灯，避免跳转前亮的灯残留
+            for (int i = 0; i < numLeds; i++) analogWrite(ledPins[i], 0);
+            currentMotorState = 0;
+            Serial.print(F("0x26 EEPROM 跳转到小节 "));
+            Serial.println(targetBar);
+            break;
+          }
+          Serial.println(F("0x26 无播放中，忽略跳转"));
         }
         break;
       default: break;

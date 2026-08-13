@@ -318,6 +318,13 @@ export const ja = {
     intensityHint:
       'Command: F9 25 <finger 1-5> <intensity 1-255> (fixed 4 bytes, no XOR). Select the target hand first; the command is not auto-forwarded in dual mode so each hand can be set independently.',
     logSetIntensity: 'Set finger {finger} intensity to {value} ({hand})',
+    jumpSection: 'Jump to bar',
+    jumpBarLabel: 'Bar',
+    jumpButton: 'Jump',
+    jumpRangeError: 'Bar range: 1~255',
+    jumpHint:
+      'Command: F9 26 <bar 1-based> 00 (fixed 4 bytes, no XOR). Select the target hand first; the currently playing score (SRAM/EEPROM) jumps to that bar and resumes from its start.',
+    logJumpBar: 'Jump to bar {value} ({hand})',
     clearSection: 'Clear score',
     clearTargetLabel: 'Clear target',
     clearPartitionLabel: 'EEPROM partition',
