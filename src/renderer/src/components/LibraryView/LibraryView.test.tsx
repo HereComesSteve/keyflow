@@ -97,8 +97,11 @@ describe('LibraryView', () => {
     render(<LibraryView onOpenEntry={vi.fn()} onOpenFileDialog={vi.fn()} />);
     await screen.findByText('Banana');
 
-    fireEvent.change(screen.getByLabelText('並べ替え'), { target: { value: 'title' } });
-    fireEvent.change(screen.getByLabelText('順序'), { target: { value: 'asc' } });
+    fireEvent.click(screen.getByLabelText('並べ替え'));
+    fireEvent.click(screen.getByRole('option', { name: 'タイトル' }));
+
+    fireEvent.click(screen.getByLabelText('順序'));
+    fireEvent.click(screen.getByRole('option', { name: '昇順' }));
 
     const rows = screen.getAllByRole('row').slice(1);
     expect(within(rows[0]).getByText('Apple')).toBeInTheDocument();

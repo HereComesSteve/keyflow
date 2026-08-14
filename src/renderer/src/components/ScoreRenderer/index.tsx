@@ -22,6 +22,16 @@ const PAGE_GAP_PX = 28;
  */
 const PAGE_MARGIN_PX = 32;
 
+/** 缓存读写用 IPC 的最小接口（window.electronAPI 的 file 子集，TASK-101 以降）。 */
+type ScoreRendererCacheIpc = {
+  electronAPI?: {
+    file?: {
+      readIfExists: (path: string) => Promise<string | null>;
+      write: (path: string, data: string) => Promise<unknown>;
+    };
+  };
+};
+
 /**
  * A4 紙の基準幅（px）。換算：210mm × 96dpi ≒ 794px。
  * OSMD の分頁モードでもページ幅をコンテナ幅（offsetWidth）から導出する
@@ -166,6 +176,8 @@ export const ScoreRenderer: React.FC<ScoreRendererProps> = ({
       setIsLoaded(false);
       const controller = osmdControllerRef.current;
       const cachePath = musicXmlPath ? musicXmlPath + SCOREMAP_CACHE_SUFFIX : null;
+      // window.electronAPI は preload の contextBridge 経由で注入されるため、型安全に参照する。
+      const cacheIpc = window as unknown as ScoreRendererCacheIpc;
       controller
         .load(musicXmlContent)
         .then(async () => {
@@ -176,9 +188,9 @@ export const ScoreRenderer: React.FC<ScoreRendererProps> = ({
           // applyCache が成功すると cursor 遍历（buildNoteIdMap）を完全にスキップ
           // でき、10秒程度かかる処理が O(1) のマップ復元のみで完了する。
           let cacheApplied = false;
-          if (cachePath && typeof window !== 'undefined' && (window as any).electronAPI) {
+          if (cachePath && cacheIpc.electronAPI?.file) {
             try {
-              const cacheText = await (window as any).electronAPI.file.readIfExists(cachePath);
+              const cacheText = await cacheIpc.electronAPI.file.readIfExists(cachePath);
               if (cacheText) {
                 const parsed = JSON.parse(cacheText) as ScoreMapCache;
                 cacheApplied = controller.applyCache(score, parsed);
@@ -209,10 +221,10 @@ export const ScoreRenderer: React.FC<ScoreRendererProps> = ({
               if (cancelled) return;
               // TASK-049: 独立採番をやめ、パース済みscoreとの照合でnoteIdマップを構築する。
               controller.buildNoteIdMap(score);
-              if (cachePath && typeof window !== 'undefined' && (window as any).electronAPI) {
+              if (cachePath && cacheIpc.electronAPI?.file) {
                 const cacheData = controller.serializeCache();
                 if (cacheData) {
-                  (window as any).electronAPI.file
+                  cacheIpc.electronAPI.file
                     .write(cachePath, JSON.stringify(cacheData))
                     .catch((err: unknown) => {
                       console.warn('[ScoreRenderer] scoremap cache write failed:', err);
@@ -493,7 +505,11 @@ export const ScoreRenderer: React.FC<ScoreRendererProps> = ({
       }}
     >
       {!score && (
-        <div style={{ margin: 'auto', color: '#666' }} data-testid="placeholder">
+        <div
+          style={{ margin: 'auto' }}
+          className="kf-score-placeholder"
+          data-testid="placeholder"
+        >
           {t.scoreRenderer.placeholder}
         </div>
       )}
@@ -530,7 +546,8 @@ export const ScoreRenderer: React.FC<ScoreRendererProps> = ({
         <style>{`
           [data-testid="osmd-container"] > div[id^="osmdCanvasPage"] {
             background-color: #ffffff;
-            box-shadow: 0 1px 8px rgba(0,0,0,0.15);
+            border-radius: 2px;
+            box-shadow: 0 1px 2px rgba(16,24,40,0.08), 0 8px 24px -8px rgba(16,24,40,0.18);
             margin-right: ${PAGE_GAP_PX}px;
             flex-shrink: 0;
           }
@@ -542,7 +559,8 @@ export const ScoreRenderer: React.FC<ScoreRendererProps> = ({
         <style>{`
           [data-testid="osmd-container"] > div[id^="osmdCanvasPage"] {
             background-color: #ffffff;
-            box-shadow: 0 1px 8px rgba(0,0,0,0.15);
+            border-radius: 2px;
+            box-shadow: 0 1px 2px rgba(16,24,40,0.08), 0 8px 24px -8px rgba(16,24,40,0.18);
             margin-bottom: ${PAGE_GAP_PX}px;
           }
           [data-testid="osmd-container"] > div[id^="osmdCanvasPage"]:last-child {

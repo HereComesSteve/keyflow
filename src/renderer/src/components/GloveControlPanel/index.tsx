@@ -35,6 +35,8 @@ import { useTranslation } from '../../lib/i18n/useTranslation';
 import { formatMessage } from '../../lib/i18n/format';
 import type { BluetoothDeviceInfo } from '../../types/electron-api';
 import type { Annotation } from '../../types';
+import { GloveIcon } from '../icons/GloveIcon';
+import './GloveControlPanel.css';
 
 export interface GloveControlPanelProps {
   isOpen: boolean;
@@ -54,8 +56,107 @@ function formatTimestamp(date: Date): string {
   return `${hh}:${mm}:${ss}`;
 }
 
+/** 日志行着色：指令发送行(→)高亮为青色，含警告标记(⚠️)的行高亮为琥珀色。 */
+function logLineClass(line: string): string {
+  if (line.includes('⚠️')) return 'glove-log__line--warn';
+  if (line.includes('→')) return 'glove-log__line--cmd';
+  return '';
+}
+
+/* ---------- 图标（内联 SVG,继承 currentColor） ---------- */
+
+interface IconProps {
+  size?: number;
+}
+
+const PlayIcon = ({ size = 16 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M8 5.14v13.72c0 .8.87 1.3 1.56.9l11.03-6.86a1.05 1.05 0 0 0 0-1.8L9.56 4.24A1.05 1.05 0 0 0 8 5.14Z" />
+  </svg>
+);
+
+const PauseIcon = ({ size = 16 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M7 5h4v14H7zM13 5h4v14h-4z" />
+  </svg>
+);
+
+const StopIcon = ({ size = 16 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" />
+  </svg>
+);
+
+const ResetIcon = ({ size = 16 }: IconProps) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 12a9 9 0 1 0 2.64-6.36" />
+    <path d="M21 3v6h-6" />
+  </svg>
+);
+
+const ChipIcon = ({ size = 16 }: IconProps) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="5" y="5" width="14" height="14" rx="2" />
+    <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
+  </svg>
+);
+
+const DatabaseIcon = ({ size = 16 }: IconProps) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    aria-hidden="true"
+  >
+    <ellipse cx="12" cy="5" rx="8" ry="3" />
+    <path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+    <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+  </svg>
+);
+
+const TrashIcon = ({ size = 16 }: IconProps) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 6h18" />
+    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <path d="M10 11v6M14 11v6" />
+  </svg>
+);
+
 /**
- * Bluetooth手套（左手套・マスター）接続用の全画面モーダル（ルーティング不要）。
+ * Bluetooth手套（左手套・マスター）接続用のモーダルダイアログ（ルーティング不要）。
  *
  * 通信トポロジーの制約上、PCは左手套のみと接続する。本パネルは左手套1台分の
  * 接続・切断・状態表示・ログ表示を担う。接続状態・ログはglove-slice（Zustand）で
@@ -90,7 +191,7 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
   // bluetooth:devices-updated 購読解除関数（connect終了/パネル閉鎖時に呼ぶ）
   const unsubscribeDevicesRef = useRef<(() => void) | null>(null);
 
-  // 硬件控制状态：模式（单手/双手）、目标设备（左/右，仅单手模式）、EEPROM 分区。
+  // 硬件控制状态：模式（单手/双手）、目标设备（左/右）、EEPROM 分区。
   // 这些是 UI 对已发送指令的镜像，发送成功后才更新。
   const [mode, setMode] = useState<'single' | 'dual'>('single');
   const [target, setTarget] = useState<'left' | 'right'>('left');
@@ -107,6 +208,10 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
   const [rangeInput, setRangeInput] = useState('');
   const [writeStatus, setWriteStatus] = useState('');
   const [isWriting, setIsWriting] = useState(false);
+  // 写入进度（进度条显示用），null 表示未在写入。
+  const [writeProgress, setWriteProgress] = useState<{ current: number; total: number } | null>(
+    null
+  );
   // 取消标志：写入循环每次迭代检查，true 时立即退出。
   const shouldCancelRef = useRef(false);
 
@@ -179,7 +284,7 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
 
   // 「接続」ボタンクリック時の処理。
   // 主プロセスの発見デバイス一覧を購読しつつ GloveController.connect（requestDevice）を
-  // 呼ぶ。requestDevice はユーザーが一覧からデバイスを選択するまで解決しない。
+  // 呼ぶ。 requestDevice はユーザーが一覧からデバイスを選択するまで解決しない。
   // 選択/キャンセルは handlePickDevice / handleCancelScan からIPCで主プロセスへ通知。
   const handleConnect = async (): Promise<void> => {
     if (isBusyRef.current || isConnected) return;
@@ -304,7 +409,7 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
       if (ok) setMode('dual');
     });
 
-  // 目标设备切换（仅单手模式）
+  // 目标设备切换
   const handleTargetLeft = (): Promise<void> =>
     sendCommand(TARGET_COMMANDS.left, t.glove.targetLeft).then((ok) => {
       if (ok) setTarget('left');
@@ -354,6 +459,7 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     shouldCancelRef.current = false;
     const startTime = Date.now();
     setIsWriting(true);
+    setWriteProgress({ current: 0, total: parsed.pairs.length });
     const targetLabel = target === 'left' ? t.glove.targetLeft : t.glove.targetRight;
     const storageLabel = writeStorage === 'sram' ? t.glove.sram : t.glove.eeprom;
     addGloveLog(
@@ -418,6 +524,7 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
         // UI 更新：每 20 条或最后一条更新一次状态（减少 React 重渲染开销）
         if (i % 20 === 0 || i === total - 1) {
           setWriteStatus(formatMessage(t.glove.writingProgress, { current: i + 1, total }));
+          setWriteProgress({ current: i + 1, total });
         }
       }
 
@@ -448,6 +555,7 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
       addGloveLog(`[${ts()}] ${errMsg}`);
     } finally {
       setIsWriting(false);
+      setWriteProgress(null);
       shouldCancelRef.current = false;
     }
   };
@@ -650,957 +758,718 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     }
   };
 
-  // 控制按钮统一禁用条件：单条发送中或乐谱写入中。
-  const controlsDisabled = sending || isWriting;
+  // 硬件指令按钮的统一禁用条件：未连接、单条发送中或乐谱写入中。
+  // 输入类控件（乐谱文本域、范围、存储选择等）仅受"忙碌中"影响，
+  // 允许用户在未连接时先准备数据。
+  const busy = sending || isWriting;
+  const cmdDisabled = busy || !isConnected;
+  // 未连接时给指令按钮提示"请先连接手套"。
+  const connHint = !isConnected ? t.glove.logNotConnected : undefined;
 
-  // 控制区卡片样式（与连接卡片一致的浅色主题）
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: '#fff',
-    border: '1px solid #e5e7eb',
-    borderRadius: '8px',
-    padding: '16px 20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-    boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-  };
-  // 控制按钮样式：active 时高亮（蓝底白字），禁用时半透明 + 禁用光标。
-  const commandButtonStyle = (active = false): React.CSSProperties => ({
-    padding: '8px 14px',
-    backgroundColor: active ? '#2563eb' : '#fff',
-    color: active ? 'white' : '#374151',
-    border: `1px solid ${active ? '#2563eb' : '#d1d5db'}`,
-    borderRadius: '4px',
-    cursor: controlsDisabled ? 'not-allowed' : 'pointer',
-    fontSize: '0.875rem',
-    fontWeight: 500,
-    opacity: controlsDisabled ? 0.6 : 1,
-  });
+  // EEPROM 分区选项（0~7），三处共用。
+  const partitionOptions = Array.from(
+    { length: EEPROM_PARTITION_MAX - EEPROM_PARTITION_MIN + 1 },
+    (_, i) => EEPROM_PARTITION_MIN + i
+  );
+
+  // 写入进度百分比（进度条显示）。
+  const writePercent = writeProgress
+    ? Math.round((writeProgress.current / writeProgress.total) * 100)
+    : 0;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-        backgroundColor: '#f5f5f5',
-        color: '#111827',
-        zIndex: 1000,
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      {/* Header bar: 左に閉じるボタン、中央にタイトル */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          height: '48px',
-          padding: '0 12px',
-          backgroundColor: '#fff',
-          borderBottom: '1px solid #ccc',
-          flexShrink: 0,
-        }}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={t.glove.closeButtonAriaLabel}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '36px',
-            height: '36px',
-            padding: 0,
-            backgroundColor: 'transparent',
-            border: 'none',
-            borderRadius: '6px',
-            color: '#374151',
-            cursor: 'pointer',
-          }}
-        >
-          <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
-        <h2 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600 }}>
-          {t.glove.dialogTitle}
-        </h2>
-      </div>
-
-      {/* Content */}
+    <div className="glove-overlay">
       <div
         ref={dialogRef}
+        className="glove-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={t.glove.dialogTitle}
         tabIndex={-1}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '16px',
-          maxWidth: '720px',
-          width: '100%',
-          margin: '0 auto',
-          boxSizing: 'border-box',
-        }}
       >
-        {/* 左手套カード */}
-        <div
-          style={{
-            backgroundColor: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '16px 20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px',
-            boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span aria-hidden="true" style={{ fontSize: '1.5rem' }}>🧤</span>
-            <span style={{ fontSize: '1rem', fontWeight: 600 }}>{t.glove.leftGloveLabel}</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={handleConnect}
-              disabled={isConnected || isScanning}
-              style={{
-                padding: '8px 16px',
-                backgroundColor: isConnected || isScanning ? '#9ca3af' : '#2563eb',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: isConnected || isScanning ? 'not-allowed' : 'pointer',
-                fontWeight: 500,
-              }}
-            >
-              {t.glove.connectButton}
-            </button>
-            <span style={{ fontSize: '0.875rem' }}>
-              {t.glove.statusLabel}{' '}
-              {isConnected ? (
-                <span style={{ color: '#059669', fontWeight: 500 }}>
-                  {t.glove.statusConnected}
-                  {deviceName ? ` (${deviceName})` : ''}
-                </span>
-              ) : (
-                <span style={{ color: '#6b7280' }}>{t.glove.statusDisconnected}</span>
-              )}
+        {/* Header */}
+        <header className="glove-header">
+          <div className="glove-header__brand">
+            <span className="glove-header__icon" style={{ color: '#fff' }} aria-hidden="true">
+              <GloveIcon size={18} strokeWidth={2} />
             </span>
+            <span>{t.glove.dialogTitle}</span>
           </div>
-        </div>
-
-        {/* スキャン中: 発見デバイス一覧を表示しユーザーに選ばせる */}
-        {isScanning && (
-          <div
-            style={{
-              backgroundColor: '#fff',
-              border: '1px solid #e5e7eb',
-              borderRadius: '8px',
-              padding: '16px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px',
-              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-            }}
+          <div className="glove-header__spacer" />
+          <span
+            className={`glove-status-pill ${isConnected ? 'glove-status-pill--connected' : 'glove-status-pill--disconnected'}`}
           >
-            <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>{t.glove.scanPrompt}</div>
-            <div style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.scanningHint}</div>
-            {availableDevices.length === 0 ? (
-              <div style={{ fontSize: '0.8125rem', color: '#9ca3af', fontStyle: 'italic' }}>
-                {t.glove.noDevicesYet}
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {availableDevices.map((device) => (
-                  <button
-                    key={device.deviceId}
-                    type="button"
-                    onClick={() => handlePickDevice(device.deviceId)}
-                    style={{
-                      textAlign: 'left',
-                      padding: '10px 12px',
-                      backgroundColor: '#fafafa',
-                      color: '#111827',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '0.875rem',
-                    }}
+            {isConnected ? t.glove.statusConnected : t.glove.statusDisconnected}
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t.glove.closeButtonAriaLabel}
+            className="glove-icon-btn"
+          >
+            <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </header>
+
+        {/* Content */}
+        <div className="glove-body">
+          {/* 连接卡片 */}
+          <section className="glove-card">
+            <div className="glove-connection">
+              <div>
+                <div className="glove-connection__title">
+                  <span
+                    className="glove-connection__emoji"
+                    style={{ color: 'var(--gp-primary)' }}
+                    aria-hidden="true"
                   >
-                    {device.deviceName || device.deviceId}
+                    <GloveIcon size={22} strokeWidth={1.8} />
+                  </span>
+                  <span>{t.glove.leftGloveLabel}</span>
+                </div>
+                <div className="glove-connection__sub">
+                  <span
+                    className={`glove-connection__dot ${isConnected ? 'glove-connection__dot--on' : 'glove-connection__dot--off'}`}
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {isConnected ? (
+                      <>
+                        <span style={{ color: 'var(--gp-success)', fontWeight: 600 }}>
+                          {t.glove.statusConnected}
+                        </span>
+                        {deviceName ? ` · ${deviceName}` : ''}
+                      </>
+                    ) : (
+                      t.glove.statusDisconnected
+                    )}
+                  </span>
+                </div>
+              </div>
+              <div className="glove-connection__actions">
+                {isConnected ? (
+                  <button
+                    type="button"
+                    onClick={handleDisconnect}
+                    className="glove-btn glove-btn--danger"
+                  >
+                    {t.glove.disconnectButton}
                   </button>
-                ))}
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleConnect}
+                    disabled={isScanning}
+                    className="glove-btn glove-btn--primary"
+                  >
+                    {isScanning && <span className="glove-spinner" aria-hidden="true" />}
+                    {isScanning ? t.glove.logScanning : t.glove.connectButton}
+                  </button>
+                )}
+              </div>
+            </div>
+            {!isConnected && (
+              <div className="glove-hint" role="note">
+                {t.glove.logNotConnected}
               </div>
             )}
-            <button
-              type="button"
-              onClick={handleCancelScan}
-              style={{
-                alignSelf: 'flex-start',
-                padding: '6px 12px',
-                backgroundColor: 'transparent',
-                color: '#6b7280',
-                border: '1px solid #d1d5db',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '0.8125rem',
-              }}
-            >
-              {t.glove.cancelScan}
-            </button>
+          </section>
+
+          {/* 扫描中：发现设备列表 */}
+          {isScanning && (
+            <section className="glove-card glove-scan">
+              <div className="glove-scan__header">
+                <span className="glove-spinner glove-spinner--dark" aria-hidden="true" />
+                <span>{t.glove.scanPrompt}</span>
+              </div>
+              <div className="glove-hint">{t.glove.scanningHint}</div>
+              {availableDevices.length === 0 ? (
+                <div className="glove-hint" style={{ fontStyle: 'italic' }}>
+                  {t.glove.noDevicesYet}
+                </div>
+              ) : (
+                <div className="glove-scan__list">
+                  {availableDevices.map((device) => (
+                    <button
+                      key={device.deviceId}
+                      type="button"
+                      onClick={() => handlePickDevice(device.deviceId)}
+                      className="glove-scan__item"
+                    >
+                      <span aria-hidden="true">📶</span>
+                      <span>{device.deviceName || device.deviceId}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div>
+                <button
+                  type="button"
+                  onClick={handleCancelScan}
+                  className="glove-btn glove-btn--sm"
+                >
+                  {t.glove.cancelScan}
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* 模式 + 目标设备 */}
+          <div className="glove-grid">
+            <section className="glove-card">
+              <div className="glove-section-label">
+                <span className="glove-section-label__accent" aria-hidden="true" />
+                {t.glove.modeSection}
+              </div>
+              <div className="glove-seg" role="group" aria-label={t.glove.modeSection}>
+                <button
+                  type="button"
+                  onClick={handleSingleHand}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className={`glove-seg__btn ${mode === 'single' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.singleHand}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDualHand}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className={`glove-seg__btn ${mode === 'dual' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.dualHand}
+                </button>
+              </div>
+            </section>
+
+            <section className="glove-card">
+              <div className="glove-section-label">
+                <span className="glove-section-label__accent" aria-hidden="true" />
+                {t.glove.targetSection}
+              </div>
+              <div className="glove-seg" role="group" aria-label={t.glove.targetSection}>
+                <button
+                  type="button"
+                  onClick={handleTargetLeft}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className={`glove-seg__btn ${target === 'left' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.targetLeft}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTargetRight}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className={`glove-seg__btn ${target === 'right' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.targetRight}
+                </button>
+              </div>
+              <div className="glove-hint">
+                {target === 'left' ? t.glove.logWriteTargetLeft : t.glove.logWriteTargetRight}
+              </div>
+            </section>
           </div>
-        )}
 
-        {/* 切断ボタン */}
-        <button
-          type="button"
-          onClick={handleDisconnect}
-          disabled={!isConnected}
-          style={{
-            alignSelf: 'flex-start',
-            padding: '8px 16px',
-            backgroundColor: !isConnected ? '#e5e7eb' : '#fff',
-            color: !isConnected ? '#9ca3af' : '#dc2626',
-            border: '1px solid ' + (!isConnected ? '#e5e7eb' : '#dc2626'),
-            borderRadius: '4px',
-            cursor: !isConnected ? 'not-allowed' : 'pointer',
-            fontWeight: 500,
-          }}
-        >
-          {t.glove.disconnectButton}
-        </button>
-
-        {/* 播放控制区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>{t.glove.playbackSection}</div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <button
-              type="button"
-              onClick={handleSramPlay}
-              disabled={controlsDisabled}
-              style={commandButtonStyle()}
-            >
-              {t.glove.sramPlay}
-            </button>
-            <button
-              type="button"
-              onClick={handleEepromPlay}
-              disabled={controlsDisabled}
-              style={commandButtonStyle()}
-            >
-              {t.glove.eepromPlay}
-            </button>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '0.8125rem',
-                color: '#6b7280',
-              }}
-            >
-              {t.glove.partitionLabel}
-              <select
-                value={partition}
-                onChange={(e) => setPartition(Number(e.target.value))}
-                disabled={controlsDisabled}
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  border: '1px solid #d1d5db',
-                  backgroundColor: '#fff',
-                  color: '#374151',
-                  fontSize: '0.8125rem',
-                }}
-              >
-                {Array.from(
-                  { length: EEPROM_PARTITION_MAX - EEPROM_PARTITION_MIN + 1 },
-                  (_, i) => {
-                    const v = EEPROM_PARTITION_MIN + i;
-                    return (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    );
-                  }
-                )}
-              </select>
-            </label>
-            <button type="button" onClick={handleStop} disabled={controlsDisabled} style={commandButtonStyle()}>
-              {t.glove.stop}
-            </button>
-            <button type="button" onClick={handlePause} disabled={controlsDisabled} style={commandButtonStyle()}>
-              {t.glove.pause}
-            </button>
-            <button type="button" onClick={handleResume} disabled={controlsDisabled} style={commandButtonStyle()}>
-              {t.glove.resume}
-            </button>
-            <button type="button" onClick={handleReset} disabled={controlsDisabled} style={commandButtonStyle()}>
-              {t.glove.reset}
-            </button>
-          </div>
-        </div>
-
-        {/* 模式设置区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>{t.glove.modeSection}</div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={handleSingleHand}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(mode === 'single')}
-            >
-              {t.glove.singleHand}
-            </button>
-            <button
-              type="button"
-              onClick={handleDualHand}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(mode === 'dual')}
-            >
-              {t.glove.dualHand}
-            </button>
-          </div>
-        </div>
-
-        {/* 目标设备选择区（仅单手模式显示） */}
-        {mode === 'single' && (
-          <div style={cardStyle}>
-            <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>{t.glove.targetSection}</div>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {/* 播放控制 */}
+          <section className="glove-card">
+            <div className="glove-section-label">
+              <span className="glove-section-label__accent" aria-hidden="true" />
+              {t.glove.playbackSection}
+            </div>
+            <div className="glove-transport">
               <button
                 type="button"
-                onClick={handleTargetLeft}
-                disabled={controlsDisabled}
-                style={commandButtonStyle(target === 'left')}
+                onClick={handleSramPlay}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn glove-btn--primary"
               >
-                {t.glove.targetLeft}
+                <ChipIcon />
+                {t.glove.sramPlay}
               </button>
               <button
                 type="button"
-                onClick={handleTargetRight}
-                disabled={controlsDisabled}
-                style={commandButtonStyle(target === 'right')}
+                onClick={handleEepromPlay}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn glove-btn--primary"
               >
-                {t.glove.targetRight}
+                <DatabaseIcon />
+                {t.glove.eepromPlay}
+              </button>
+              <button
+                type="button"
+                onClick={handleStop}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn"
+              >
+                <StopIcon />
+                {t.glove.stop}
+              </button>
+              <button
+                type="button"
+                onClick={handlePause}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn"
+              >
+                <PauseIcon />
+                {t.glove.pause}
+              </button>
+              <button
+                type="button"
+                onClick={handleResume}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn"
+              >
+                <PlayIcon />
+                {t.glove.resume}
+              </button>
+              <button
+                type="button"
+                onClick={handleReset}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn"
+              >
+                <ResetIcon />
+                {t.glove.reset}
               </button>
             </div>
-          </div>
-        )}
-
-        {/* 📝 乐谱写入区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>📝 {t.glove.writeSection}</div>
-
-          {/* 目标设备（始终显示，与模式设置区目标按钮共用 target 状态） */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.writeTargetLabel}</span>
-            <button
-              type="button"
-              onClick={handleTargetLeft}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(target === 'left')}
-            >
-              {t.glove.targetLeft}
-            </button>
-            <button
-              type="button"
-              onClick={handleTargetRight}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(target === 'right')}
-            >
-              {t.glove.targetRight}
-            </button>
-          </div>
-
-          {/* 存储介质（SRAM / EEPROM），EEPROM 时显示分区选择器 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.writeStorageLabel}</span>
-            <button
-              type="button"
-              onClick={() => setWriteStorage('sram')}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(writeStorage === 'sram')}
-            >
-              {t.glove.sram}
-            </button>
-            <button
-              type="button"
-              onClick={() => setWriteStorage('eeprom')}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(writeStorage === 'eeprom')}
-            >
-              {t.glove.eeprom}
-            </button>
-            {writeStorage === 'eeprom' && (
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  fontSize: '0.8125rem',
-                  color: '#6b7280',
-                }}
-              >
+            <div className="glove-row">
+              <label className="glove-hint" style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
                 {t.glove.partitionLabel}
                 <select
-                  value={writePartition}
-                  onChange={(e) => setWritePartition(Number(e.target.value))}
-                  disabled={controlsDisabled}
-                  style={{
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    border: '1px solid #d1d5db',
-                    backgroundColor: '#fff',
-                    color: '#374151',
-                    fontSize: '0.8125rem',
-                  }}
+                  value={partition}
+                  onChange={(e) => setPartition(Number(e.target.value))}
+                  disabled={busy}
+                  className="glove-select glove-select--num"
                 >
-                  {Array.from(
-                    { length: EEPROM_PARTITION_MAX - EEPROM_PARTITION_MIN + 1 },
-                    (_, i) => {
-                      const v = EEPROM_PARTITION_MIN + i;
-                      return (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      );
-                    }
-                  )}
-                </select>
-              </label>
-            )}
-          </div>
-
-          {/* 从当前乐谱导入 + 发送范围 */}
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '6px',
-            padding: '8px 12px',
-            backgroundColor: '#f0f9ff',
-            border: '1px dashed #38bdf8',
-            borderRadius: '6px',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.8125rem', color: '#374151' }}>
-                {t.glove.rangeLabel}
-                <input
-                  type="text"
-                  value={rangeInput}
-                  onChange={(e) => setRangeInput(e.target.value)}
-                  placeholder={t.glove.rangePlaceholder}
-                  style={{
-                    width: '160px',
-                    padding: '4px 8px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '4px',
-                    fontSize: '0.8125rem',
-                  }}
-                />
-              </label>
-              <button
-                type="button"
-                onClick={handleImportFromScore}
-                disabled={controlsDisabled}
-                style={{
-                  padding: '6px 14px',
-                  backgroundColor: '#0ea5e9',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '0.8125rem',
-                  cursor: controlsDisabled ? 'not-allowed' : 'pointer',
-                  opacity: controlsDisabled ? 0.5 : 1,
-                }}
-              >
-                📋 {t.glove.importFromScore}
-              </button>
-            </div>
-            <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-              {t.glove.rangeHint}
-            </span>
-          </div>
-
-          {/* 乐谱数据文本域 */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.scoreDataLabel}</span>
-            <textarea
-              value={scoreInput}
-              onChange={(e) => setScoreInput(e.target.value)}
-              placeholder={t.glove.scoreDataPlaceholder}
-              disabled={isWriting}
-              spellCheck={false}
-              style={{
-                width: '100%',
-                minHeight: '80px',
-                padding: '8px',
-                borderRadius: '4px',
-                border: '1px solid #d1d5db',
-                backgroundColor: '#fff',
-                color: '#374151',
-                fontFamily: 'monospace',
-                fontSize: '0.8125rem',
-                resize: 'vertical',
-                boxSizing: 'border-box',
-              }}
-            />
-            <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-              {formatMessage(t.glove.statCommands, { count: scoreCommandCount })}
-              {writeStorage === 'sram' && ` · ${t.glove.sramCapacityHint}`}
-              {writeStorage === 'eeprom' && ` · ${t.glove.eepromCapacityHint}`}
-            </span>
-          </div>
-
-          {/* 写入按钮 + 取消按钮 + 状态提示 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={handleWriteScore}
-              disabled={controlsDisabled}
-              style={commandButtonStyle()}
-            >
-              {isWriting ? t.glove.writingButton : t.glove.writeButton}
-            </button>
-            {isWriting && (
-              <button
-                type="button"
-                onClick={handleCancelWrite}
-                style={{ ...commandButtonStyle(), background: '#dc2626', color: '#fff' }}
-              >
-                {t.glove.cancelWriteButton}
-              </button>
-            )}
-            {writeStatus && (
-              <span style={{ fontSize: '0.8125rem', color: '#374151' }}>{writeStatus}</span>
-            )}
-          </div>
-        </div>
-
-        {/* ⚡ BPM 设置区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>⚡ {t.glove.bpmSection}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.bpmInputLabel}</span>
-            <input
-              type="number"
-              value={bpmInput}
-              onChange={(e) => setBpmInput(e.target.value)}
-              disabled={controlsDisabled}
-              min={BPM_MIN}
-              max={BPM_MAX}
-              style={{
-                width: '72px',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                border: '1px solid #d1d5db',
-                backgroundColor: '#fff',
-                color: '#374151',
-                fontSize: '0.8125rem',
-              }}
-            />
-            <button
-              type="button"
-              onClick={handleSetBpm}
-              disabled={controlsDisabled}
-              style={commandButtonStyle()}
-            >
-              {t.glove.bpmSetButton}
-            </button>
-          </div>
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-            {formatMessage(t.glove.bpmCurrent, { value: bpmValue })}
-            {bpmStatus && <span style={{ color: '#dc2626', marginLeft: '8px' }}>{bpmStatus}</span>}
-          </div>
-        </div>
-
-        {/* 🎵 拍号设置区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>🎵 {t.glove.timeSignatureSection}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.timeSignatureLabel}</span>
-            <select
-              value={timeSignature}
-              onChange={(e) => setTimeSignature(e.target.value)}
-              disabled={controlsDisabled}
-              style={{
-                padding: '4px 8px',
-                borderRadius: '4px',
-                border: '1px solid #d1d5db',
-                backgroundColor: '#fff',
-                color: '#374151',
-                fontSize: '0.8125rem',
-              }}
-            >
-              {TIME_SIGNATURE_OPTIONS.map((opt) => (
-                <option key={opt.label} value={opt.label}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={handleSetTimeSignature}
-              disabled={controlsDisabled}
-              style={commandButtonStyle()}
-            >
-              {t.glove.timeSignatureSetButton}
-            </button>
-          </div>
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-            {formatMessage(t.glove.timeSignatureCurrent, { value: timeSignatureValue })}
-          </div>
-        </div>
-
-        {/* 🖐 马达强度设置区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>🖐 {t.glove.intensitySection}</div>
-
-          {/* 目标设备（左右手）：选左手→左手本地执行，选右手→由左手转发给右手。
-              与模式/写入区的目标按钮共用 target 状态。 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.writeTargetLabel}</span>
-            <button
-              type="button"
-              onClick={handleTargetLeft}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(target === 'left')}
-            >
-              {t.glove.targetLeft}
-            </button>
-            <button
-              type="button"
-              onClick={handleTargetRight}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(target === 'right')}
-            >
-              {t.glove.targetRight}
-            </button>
-          </div>
-
-          {/* 手指选择 + 强度输入 + 发送/一键发送 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.intensityFingerLabel}</span>
-            <select
-              value={strengthFinger}
-              onChange={(e) => setStrengthFinger(Number(e.target.value))}
-              disabled={controlsDisabled}
-              style={{
-                padding: '4px 8px',
-                borderRadius: '4px',
-                border: '1px solid #d1d5db',
-                backgroundColor: '#fff',
-                color: '#374151',
-                fontSize: '0.8125rem',
-              }}
-            >
-              {Array.from(
-                { length: INTENSITY_FINGER_MAX - INTENSITY_FINGER_MIN + 1 },
-                (_, i) => {
-                  const v = INTENSITY_FINGER_MIN + i;
-                  return (
+                  {partitionOptions.map((v) => (
                     <option key={v} value={v}>
                       {v}
                     </option>
-                  );
-                }
-              )}
-            </select>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.intensityValueLabel}</span>
-            <input
-              type="number"
-              value={intensityInput}
-              onChange={(e) => setIntensityInput(e.target.value)}
-              disabled={controlsDisabled}
-              min={INTENSITY_MIN}
-              max={INTENSITY_MAX}
-              style={{
-                width: '72px',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                border: '1px solid #d1d5db',
-                backgroundColor: '#fff',
-                color: '#374151',
-                fontSize: '0.8125rem',
-              }}
-            />
-            <button
-              type="button"
-              onClick={handleSendIntensity}
-              disabled={controlsDisabled}
-              style={commandButtonStyle()}
-            >
-              {t.glove.intensitySendButton}
-            </button>
-            <button
-              type="button"
-              onClick={handleSendAllIntensity}
-              disabled={controlsDisabled}
-              style={{ ...commandButtonStyle(), backgroundColor: '#7c3aed', color: 'white', borderColor: '#7c3aed' }}
-            >
-              {t.glove.intensitySendAllButton}
-            </button>
-          </div>
-
-          {intensityStatus && (
-            <div style={{ fontSize: '0.8125rem', color: '#dc2626' }}>{intensityStatus}</div>
-          )}
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{t.glove.intensityHint}</div>
-        </div>
-
-        {/* ⏩ 小节跳转区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>⏩ {t.glove.jumpSection}</div>
-
-          {/* 目标设备（左右手）：与强度/写入区共用 target 状态 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.writeTargetLabel}</span>
-            <button
-              type="button"
-              onClick={handleTargetLeft}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(target === 'left')}
-            >
-              {t.glove.targetLeft}
-            </button>
-            <button
-              type="button"
-              onClick={handleTargetRight}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(target === 'right')}
-            >
-              {t.glove.targetRight}
-            </button>
-          </div>
-
-          {/* 小节号输入 + 跳转按钮 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.jumpBarLabel}</span>
-            <input
-              type="number"
-              value={jumpBarInput}
-              onChange={(e) => setJumpBarInput(e.target.value)}
-              disabled={controlsDisabled}
-              min={JUMP_BAR_MIN}
-              max={JUMP_BAR_MAX}
-              style={{
-                width: '72px',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                border: '1px solid #d1d5db',
-                backgroundColor: '#fff',
-                color: '#374151',
-                fontSize: '0.8125rem',
-              }}
-            />
-            <button
-              type="button"
-              onClick={handleJumpBar}
-              disabled={controlsDisabled}
-              style={{ ...commandButtonStyle(), backgroundColor: '#0d9488', color: 'white', borderColor: '#0d9488' }}
-            >
-              {t.glove.jumpButton}
-            </button>
-          </div>
-
-          {jumpStatus && (
-            <div style={{ fontSize: '0.8125rem', color: '#dc2626' }}>{jumpStatus}</div>
-          )}
-          <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{t.glove.jumpHint}</div>
-        </div>
-
-        {/* 🗑 清除乐谱区 */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>🗑 {t.glove.clearSection}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.8125rem', color: '#6b7280' }}>{t.glove.clearTargetLabel}</span>
-            <button
-              type="button"
-              onClick={() => setClearTarget('sram')}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(clearTarget === 'sram')}
-            >
-              {t.glove.sram}
-            </button>
-            <button
-              type="button"
-              onClick={() => setClearTarget('eeprom')}
-              disabled={controlsDisabled}
-              style={commandButtonStyle(clearTarget === 'eeprom')}
-            >
-              {t.glove.eeprom}
-            </button>
-            {clearTarget === 'eeprom' && (
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  fontSize: '0.8125rem',
-                  color: '#6b7280',
-                }}
-              >
-                {t.glove.clearPartitionLabel}
-                <select
-                  value={clearPartition}
-                  onChange={(e) => setClearPartition(Number(e.target.value))}
-                  disabled={controlsDisabled}
-                  style={{
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    border: '1px solid #d1d5db',
-                    backgroundColor: '#fff',
-                    color: '#374151',
-                    fontSize: '0.8125rem',
-                  }}
-                >
-                  {Array.from(
-                    { length: EEPROM_PARTITION_MAX - EEPROM_PARTITION_MIN + 1 },
-                    (_, i) => {
-                      const v = EEPROM_PARTITION_MIN + i;
-                      return (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      );
-                    }
-                  )}
+                  ))}
                 </select>
               </label>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={handleClearRequest}
-              disabled={controlsDisabled}
-              style={{
-                ...commandButtonStyle(),
-                backgroundColor: '#dc2626',
-                color: 'white',
-                borderColor: '#dc2626',
-              }}
-            >
-              {t.glove.clearButton}
-            </button>
-            <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>⚠️ {t.glove.clearWarning}</span>
-          </div>
-        </div>
+            </div>
+          </section>
 
-        {/* ログパネル */}
-        <div
-          style={{
-            backgroundColor: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '16px 20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            flex: 1,
-            minHeight: '200px',
-            boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span aria-hidden="true">📋</span>
-            <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{t.glove.logSectionTitle}</span>
+          {/* BPM + 拍号 */}
+          <div className="glove-grid">
+            <section className="glove-card">
+              <div className="glove-section-label">
+                <span className="glove-section-label__accent" aria-hidden="true" />
+                {t.glove.bpmSection}
+              </div>
+              <div className="glove-row">
+                <input
+                  type="number"
+                  value={bpmInput}
+                  onChange={(e) => setBpmInput(e.target.value)}
+                  disabled={busy}
+                  min={BPM_MIN}
+                  max={BPM_MAX}
+                  className="glove-input glove-input--num"
+                />
+                <button
+                  type="button"
+                  onClick={handleSetBpm}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className="glove-btn glove-btn--sm"
+                >
+                  {t.glove.bpmSetButton}
+                </button>
+              </div>
+              <div className="glove-hint">
+                {formatMessage(t.glove.bpmCurrent, { value: bpmValue })}
+                {bpmStatus && <span className="glove-error" style={{ marginLeft: '8px' }}>{bpmStatus}</span>}
+              </div>
+            </section>
+
+            <section className="glove-card">
+              <div className="glove-section-label">
+                <span className="glove-section-label__accent" aria-hidden="true" />
+                {t.glove.timeSignatureSection}
+              </div>
+              <div className="glove-row">
+                <select
+                  value={timeSignature}
+                  onChange={(e) => setTimeSignature(e.target.value)}
+                  disabled={busy}
+                  className="glove-select"
+                >
+                  {TIME_SIGNATURE_OPTIONS.map((opt) => (
+                    <option key={opt.label} value={opt.label}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleSetTimeSignature}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className="glove-btn glove-btn--sm"
+                >
+                  {t.glove.timeSignatureSetButton}
+                </button>
+              </div>
+              <div className="glove-hint">
+                {formatMessage(t.glove.timeSignatureCurrent, { value: timeSignatureValue })}
+              </div>
+            </section>
           </div>
-          <div
-            ref={logContainerRef}
-            style={{
-              flex: 1,
-              minHeight: 0,
-              overflowY: 'auto',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-              fontSize: '0.8125rem',
-              color: '#374151',
-              backgroundColor: '#fafafa',
-              border: '1px solid #f3f4f6',
-              borderRadius: '4px',
-              padding: '8px 12px',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
-            {logs.length === 0 ? (
-              <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>{t.glove.logEmpty}</span>
-            ) : (
-              logs.map((line, idx) => (
-                <div key={idx} style={{ lineHeight: '1.6' }}>
-                  {line}
+
+          {/* 乐谱写入 */}
+          <section className="glove-card">
+            <div className="glove-section-label">
+              <span className="glove-section-label__accent" aria-hidden="true" />
+              {t.glove.writeSection}
+              <span className="glove-badge">
+                {formatMessage(t.glove.statCommands, { count: scoreCommandCount })}
+              </span>
+            </div>
+
+            {/* 存储介质（SRAM / EEPROM），EEPROM 时显示分区选择器 */}
+            <div className="glove-row">
+              <span className="glove-hint">{t.glove.writeStorageLabel}</span>
+              <div className="glove-seg" role="group" aria-label={t.glove.writeStorageLabel}>
+                <button
+                  type="button"
+                  onClick={() => setWriteStorage('sram')}
+                  disabled={busy}
+                  className={`glove-seg__btn ${writeStorage === 'sram' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.sram}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWriteStorage('eeprom')}
+                  disabled={busy}
+                  className={`glove-seg__btn ${writeStorage === 'eeprom' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.eeprom}
+                </button>
+              </div>
+              {writeStorage === 'eeprom' && (
+                <label className="glove-hint" style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                  {t.glove.partitionLabel}
+                  <select
+                    value={writePartition}
+                    onChange={(e) => setWritePartition(Number(e.target.value))}
+                    disabled={busy}
+                    className="glove-select glove-select--num"
+                  >
+                    {partitionOptions.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+
+            {/* 从当前乐谱导入 + 发送范围 */}
+            <div className="glove-import">
+              <div className="glove-row">
+                <label className="glove-hint" style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                  {t.glove.rangeLabel}
+                  <input
+                    type="text"
+                    value={rangeInput}
+                    onChange={(e) => setRangeInput(e.target.value)}
+                    disabled={busy}
+                    placeholder={t.glove.rangePlaceholder}
+                    className="glove-input"
+                    style={{ width: '170px' }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleImportFromScore}
+                  disabled={busy}
+                  className="glove-btn glove-btn--sm"
+                >
+                  📋 {t.glove.importFromScore}
+                </button>
+              </div>
+              <span className="glove-hint">{t.glove.rangeHint}</span>
+            </div>
+
+            {/* 乐谱数据文本域 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span className="glove-hint">{t.glove.scoreDataLabel}</span>
+              <textarea
+                value={scoreInput}
+                onChange={(e) => setScoreInput(e.target.value)}
+                placeholder={t.glove.scoreDataPlaceholder}
+                disabled={isWriting}
+                spellCheck={false}
+                className="glove-textarea"
+              />
+              <span className="glove-hint" style={{ color: 'var(--gp-text-4)' }}>
+                {formatMessage(t.glove.statCommands, { count: scoreCommandCount })}
+                {writeStorage === 'sram' && ` · ${t.glove.sramCapacityHint}`}
+                {writeStorage === 'eeprom' && ` · ${t.glove.eepromCapacityHint}`}
+              </span>
+            </div>
+
+            {/* 写入进度条 */}
+            {isWriting && writeProgress && (
+              <div className="glove-progress">
+                <div className="glove-progress__bar" role="progressbar" aria-valuenow={writePercent} aria-valuemin={0} aria-valuemax={100}>
+                  <div className="glove-progress__fill" style={{ width: `${writePercent}%` }} />
                 </div>
-              ))
+                <div className="glove-progress__label">
+                  <span>
+                    {formatMessage(t.glove.writingProgress, {
+                      current: writeProgress.current,
+                      total: writeProgress.total,
+                    })}
+                  </span>
+                  <span>{writePercent}%</span>
+                </div>
+              </div>
             )}
+
+            {/* 写入按钮 + 取消按钮 + 状态提示 */}
+            <div className="glove-row">
+              <button
+                type="button"
+                onClick={handleWriteScore}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn glove-btn--primary"
+              >
+                {isWriting && <span className="glove-spinner" aria-hidden="true" />}
+                {isWriting ? t.glove.writingButton : t.glove.writeButton}
+              </button>
+              {isWriting && (
+                <button
+                  type="button"
+                  onClick={handleCancelWrite}
+                  className="glove-btn glove-btn--solid-danger"
+                >
+                  {t.glove.cancelWriteButton}
+                </button>
+              )}
+              {writeStatus && <span className="glove-status-text">{writeStatus}</span>}
+            </div>
+          </section>
+
+          {/* 马达强度 + 小节跳转 */}
+          <div className="glove-grid">
+            <section className="glove-card">
+              <div className="glove-section-label">
+                <span className="glove-section-label__accent" aria-hidden="true" />
+                {t.glove.intensitySection}
+              </div>
+              <div className="glove-row">
+                <select
+                  value={strengthFinger}
+                  onChange={(e) => setStrengthFinger(Number(e.target.value))}
+                  disabled={busy}
+                  aria-label={t.glove.intensityFingerLabel}
+                  className="glove-select glove-select--num"
+                >
+                  {Array.from(
+                    { length: INTENSITY_FINGER_MAX - INTENSITY_FINGER_MIN + 1 },
+                    (_, i) => INTENSITY_FINGER_MIN + i
+                  ).map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  value={intensityInput}
+                  onChange={(e) => setIntensityInput(e.target.value)}
+                  disabled={busy}
+                  min={INTENSITY_MIN}
+                  max={INTENSITY_MAX}
+                  aria-label={t.glove.intensityValueLabel}
+                  className="glove-input glove-input--num"
+                />
+                <button
+                  type="button"
+                  onClick={handleSendIntensity}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className="glove-btn glove-btn--sm"
+                >
+                  {t.glove.intensitySendButton}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendAllIntensity}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className="glove-btn glove-btn--violet glove-btn--sm"
+                >
+                  {t.glove.intensitySendAllButton}
+                </button>
+              </div>
+              {intensityStatus && <div className="glove-error">{intensityStatus}</div>}
+              <div className="glove-hint">{t.glove.intensityHint}</div>
+            </section>
+
+            <section className="glove-card">
+              <div className="glove-section-label">
+                <span className="glove-section-label__accent" aria-hidden="true" />
+                {t.glove.jumpSection}
+              </div>
+              <div className="glove-row">
+                <input
+                  type="number"
+                  value={jumpBarInput}
+                  onChange={(e) => setJumpBarInput(e.target.value)}
+                  disabled={busy}
+                  min={JUMP_BAR_MIN}
+                  max={JUMP_BAR_MAX}
+                  aria-label={t.glove.jumpBarLabel}
+                  className="glove-input glove-input--num"
+                />
+                <button
+                  type="button"
+                  onClick={handleJumpBar}
+                  disabled={cmdDisabled}
+                  title={cmdDisabled ? connHint : undefined}
+                  className="glove-btn glove-btn--teal glove-btn--sm"
+                >
+                  {t.glove.jumpButton}
+                </button>
+              </div>
+              {jumpStatus && <div className="glove-error">{jumpStatus}</div>}
+              <div className="glove-hint">{t.glove.jumpHint}</div>
+            </section>
           </div>
+
+          {/* 清除乐谱 */}
+          <section className="glove-card">
+            <div className="glove-section-label">
+              <span className="glove-section-label__accent" aria-hidden="true" />
+              {t.glove.clearSection}
+            </div>
+            <div className="glove-row">
+              <span className="glove-hint">{t.glove.clearTargetLabel}</span>
+              <div className="glove-seg" role="group" aria-label={t.glove.clearTargetLabel}>
+                <button
+                  type="button"
+                  onClick={() => setClearTarget('sram')}
+                  disabled={busy}
+                  className={`glove-seg__btn ${clearTarget === 'sram' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.sram}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClearTarget('eeprom')}
+                  disabled={busy}
+                  className={`glove-seg__btn ${clearTarget === 'eeprom' ? 'glove-seg__btn--active' : ''}`}
+                >
+                  {t.glove.eeprom}
+                </button>
+              </div>
+              {clearTarget === 'eeprom' && (
+                <label className="glove-hint" style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                  {t.glove.clearPartitionLabel}
+                  <select
+                    value={clearPartition}
+                    onChange={(e) => setClearPartition(Number(e.target.value))}
+                    disabled={busy}
+                    className="glove-select glove-select--num"
+                  >
+                    {partitionOptions.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            <div className="glove-row">
+              <button
+                type="button"
+                onClick={handleClearRequest}
+                disabled={cmdDisabled}
+                title={cmdDisabled ? connHint : undefined}
+                className="glove-btn glove-btn--solid-danger glove-btn--sm"
+              >
+                <TrashIcon size={14} />
+                {t.glove.clearButton}
+              </button>
+              <span className="glove-hint" style={{ color: 'var(--gp-text-4)' }}>
+                ⚠️ {t.glove.clearWarning}
+              </span>
+            </div>
+          </section>
+
+          {/* 日志面板 */}
+          <section className="glove-card">
+            <div className="glove-log-header">
+              <div className="glove-section-label">
+                <span className="glove-section-label__accent" aria-hidden="true" />
+                {t.glove.logSectionTitle}
+              </div>
+              <span className="glove-badge">{logs.length}</span>
+            </div>
+            <div ref={logContainerRef} className="glove-log">
+              {logs.length === 0 ? (
+                <span className="glove-log__empty">{t.glove.logEmpty}</span>
+              ) : (
+                logs.map((line, idx) => (
+                  <div key={idx} className={`glove-log__line ${logLineClass(line)}`}>
+                    {line}
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
         </div>
       </div>
 
       {/* 清除乐谱二次确认弹窗 */}
       {confirmingClear && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-        >
+        <div className="glove-confirm-backdrop">
           <div
-            style={{
-              backgroundColor: '#fff',
-              borderRadius: '8px',
-              padding: '24px',
-              maxWidth: '360px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '16px',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-            }}
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={t.glove.clearConfirmTitle}
+            className="glove-confirm"
           >
-            <div style={{ fontSize: '1rem', fontWeight: 600 }}>{t.glove.clearConfirmTitle}</div>
-            <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>{t.glove.clearConfirmMessage}</div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={handleCancelClear}
-                style={commandButtonStyle()}
-              >
+            <div className="glove-confirm__title">
+              <span style={{ color: 'var(--gp-danger)' }} aria-hidden="true">
+                <TrashIcon size={17} />
+              </span>
+              {t.glove.clearConfirmTitle}
+            </div>
+            <div className="glove-confirm__message">{t.glove.clearConfirmMessage}</div>
+            <div className="glove-confirm__actions">
+              <button type="button" onClick={handleCancelClear} className="glove-btn">
                 {t.glove.clearConfirmCancel}
               </button>
               <button
                 type="button"
                 onClick={handleConfirmClear}
-                style={{
-                  ...commandButtonStyle(),
-                  backgroundColor: '#dc2626',
-                  color: 'white',
-                  borderColor: '#dc2626',
-                }}
+                className="glove-btn glove-btn--solid-danger"
               >
                 {t.glove.clearConfirmOk}
               </button>

@@ -29,21 +29,7 @@ export const FingeringEditToggle: React.FC<FingeringEditToggleProps> = ({ checke
       aria-pressed={checked}
       data-testid="fingering-edit-toggle"
       title={checked ? t.fingeringEditToggle.titleOn : t.fingeringEditToggle.titleOff}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        height: '44px',
-        padding: '0 14px',
-        fontSize: '14px',
-        fontWeight: 500,
-        borderRadius: '6px',
-        border: '1px solid #9ca3af',
-        backgroundColor: 'white',
-        color: '#374151',
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-      }}
+      className="kf-toggle"
     >
       <span>{t.fingeringEditToggle.label}</span>
       <span

@@ -743,8 +743,8 @@ export class OSMDController {
       rect.setAttribute('y', String(minY));
       rect.setAttribute('width', String(Math.max(0, maxX - minX)));
       rect.setAttribute('height', String(Math.max(0, maxY - minY)));
-      rect.setAttribute('fill', 'rgba(59, 130, 246, 0.12)');
-      rect.setAttribute('stroke', '#3b82f6');
+      rect.setAttribute('fill', 'rgba(24, 24, 27, 0.06)');
+      rect.setAttribute('stroke', '#18181b');
       rect.setAttribute('stroke-width', '2');
       rect.setAttribute('stroke-dasharray', '6,3');
       rect.setAttribute('pointer-events', 'none');
@@ -1226,8 +1226,8 @@ export class OSMDController {
         text.setAttribute('stroke', '#ffffff');
         text.setAttribute('stroke-width', '3');
         text.setAttribute('paint-order', 'stroke');
-        // 提案中（未承認）: 濃い青 / 承認済み: 濃い緑（状態を色相で区別）
-        text.setAttribute('fill', isApproved ? '#15803d' : '#1d4ed8');
+        // 提案中（未承認）: 中灰 / 承認済み: 深緑（状態を色相で区別）
+        text.setAttribute('fill', isApproved ? '#15803d' : '#52525b');
         // data-note-id：指法编辑模式下点击数字时反查 noteId（O(1)，无需额外映射）。
         // pointer-events 按编辑模式切换：平时 none（不拦截小节点击），编辑模式 auto。
         text.setAttribute('data-note-id', noteId);

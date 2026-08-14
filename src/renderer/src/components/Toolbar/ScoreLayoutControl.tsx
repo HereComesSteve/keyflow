@@ -19,19 +19,14 @@ export const ScoreLayoutControl: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-      <label htmlFor="score-layout-toggle" style={{ fontSize: '14px', color: '#374151' }}>
+      <label htmlFor="score-layout-toggle" style={{ fontSize: '14px', color: 'var(--kf-text-2)' }}>
         {t.scoreLayoutControl.label}
       </label>
       <div
         id="score-layout-toggle"
         data-testid="score-layout-toggle"
         title={t.scoreLayoutControl.title}
-        style={{
-          display: 'flex',
-          border: '1px solid #d1d5db',
-          borderRadius: '6px',
-          overflow: 'hidden',
-        }}
+        className="kf-seg"
       >
         {LAYOUTS.map((l) => (
           <button
@@ -39,14 +34,7 @@ export const ScoreLayoutControl: React.FC = () => {
             type="button"
             data-testid={`score-layout-${l.value}`}
             onClick={() => setScoreLayout(l.value)}
-            style={{
-              padding: '10px 12px',
-              fontSize: '14px',
-              cursor: 'pointer',
-              border: 'none',
-              background: scoreLayout === l.value ? '#3b82f6' : 'transparent',
-              color: scoreLayout === l.value ? '#ffffff' : '#374151',
-            }}
+            className={`kf-seg__btn ${scoreLayout === l.value ? 'kf-seg__btn--active' : ''}`}
           >
             {l.label}
           </button>

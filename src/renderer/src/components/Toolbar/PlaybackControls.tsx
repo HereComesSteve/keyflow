@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as Tone from 'tone';
 import { usePracticeStore } from '../../store';
 import { useTranslation } from '../../lib/i18n/useTranslation';
 import { withTimeout } from '../../lib/audio-engine/with-timeout';
 import { deriveRepeatPlayRange, segmentsToRangeString } from '../../lib/audio-engine';
+import { LoopRangePanel } from './LoopRangePanel';
 import type { Score } from '../../types';
 
 /**
@@ -22,23 +23,6 @@ export const AUDIO_START_TIMEOUT_MS = 5_000;
  * ここはUI側の最終防衛線であり、想定外の未決着Promiseでもボタンを無反応のままにしない。
  */
 export const PLAY_REQUEST_TIMEOUT_MS = 30_000;
-
-// TASK-075: 1行ヘッダー統合に伴い、高さを44px→36pxへコンパクト化する。
-const BTN_STYLE: React.CSSProperties = {
-  height: '36px',
-  padding: '0 12px',
-  fontSize: '14px',
-  borderRadius: '6px',
-  border: '1px solid #9ca3af',
-  backgroundColor: 'white',
-  cursor: 'pointer',
-};
-
-const BTN_DISABLED_STYLE: React.CSSProperties = {
-  ...BTN_STYLE,
-  opacity: 0.5,
-  cursor: 'not-allowed',
-};
 
 /**
  * AudioEngineService が提供する再生系メソッドの最小インターフェース。
@@ -87,6 +71,8 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
   // refで再入を弾き、stateでボタンを無効化して再描画する。
   const startingRef = useRef(false);
   const [isStarting, setIsStarting] = React.useState(false);
+  // 循环序列编辑面板（可拖动非模态弹窗）的开关状态。
+  const [isLoopPanelOpen, setIsLoopPanelOpen] = React.useState(false);
   // score === null のときだけ「未読込」として無効化する。undefined（未指定）は
   // 呼び出し側が楽譜有無を渡していないケースであり、後方互換のため無効化しない。
   const noScoreLoaded = score === null;
@@ -206,7 +192,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
   }, [handleTogglePlayPause, noScoreLoaded]);
 
   return (
-    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+    <div className="kf-transport">
       <button
         data-testid="playback-play"
         title={
@@ -219,12 +205,11 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
         aria-label={t.playbackControls.play}
         onClick={() => void handlePlay()}
         disabled={noScoreLoaded || playbackState === 'playing' || voiceLoading || isStarting}
-        style={
-          noScoreLoaded || playbackState === 'playing' || voiceLoading || isStarting
-            ? BTN_DISABLED_STYLE
-            : BTN_STYLE
-        }
+        className="kf-transport__btn kf-transport__btn--primary"
       >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5.14v13.72c0 .8.87 1.3 1.56.9l11.03-6.86a1.05 1.05 0 0 0 0-1.8L9.56 4.24A1.05 1.05 0 0 0 8 5.14Z" />
+        </svg>
         {voiceLoading ? t.playbackControls.voiceLoadingLabel : t.playbackControls.play}
       </button>
       <button
@@ -233,8 +218,11 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
         aria-label={t.playbackControls.pause}
         onClick={handlePause}
         disabled={noScoreLoaded || playbackState !== 'playing'}
-        style={noScoreLoaded || playbackState !== 'playing' ? BTN_DISABLED_STYLE : BTN_STYLE}
+        className="kf-transport__btn"
       >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M7 5h4v14H7zM13 5h4v14h-4z" />
+        </svg>
         {t.playbackControls.pause}
       </button>
       <button
@@ -243,47 +231,79 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
         aria-label={t.playbackControls.stop}
         onClick={handleStop}
         disabled={noScoreLoaded || playbackState === 'stopped'}
-        style={noScoreLoaded || playbackState === 'stopped' ? BTN_DISABLED_STYLE : BTN_STYLE}
+        className="kf-transport__btn"
       >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" />
+        </svg>
         {t.playbackControls.stop}
       </button>
-      <input
-        type="text"
-        value={playbackRange}
-        onChange={(e) => setPlaybackRange(e.target.value)}
-        placeholder={t.playbackControls.rangePlaceholder}
-        title={t.playbackControls.rangeTitle}
-        disabled={noScoreLoaded}
-        style={{
-          height: '36px',
-          width: '140px',
-          padding: '0 8px',
-          fontSize: '13px',
-          borderRadius: '6px',
-          border: '1px solid #9ca3af',
-          opacity: noScoreLoaded ? 0.5 : 1,
-        }}
-      />
       <button
         type="button"
-        onClick={handleClearRange}
-        disabled={noScoreLoaded || playbackRange === ''}
-        title="清空当前播放范围（改为线性播放）"
+        onClick={() => setIsLoopPanelOpen((open) => !open)}
+        disabled={noScoreLoaded}
+        title={t.playbackControls.loopButtonTitle}
+        className="kf-btn kf-btn--sm"
         style={
-          noScoreLoaded || playbackRange === '' ? BTN_DISABLED_STYLE : BTN_STYLE
+          playbackRange !== ''
+            ? {
+                backgroundColor: '#2563eb',
+                color: '#fff',
+                borderColor: '#2563eb',
+                opacity: noScoreLoaded ? 0.5 : 1,
+              }
+            : undefined
         }
       >
-        清空
+        {t.playbackControls.loopButton}
       </button>
-      <button
-        type="button"
-        onClick={handleResetRange}
-        disabled={noScoreLoaded}
-        title="根据乐谱反复记号重置播放范围"
-        style={noScoreLoaded ? BTN_DISABLED_STYLE : BTN_STYLE}
-      >
-        重置
-      </button>
+      {isLoopPanelOpen && (
+        <LoopRangePanel
+          title={t.playbackControls.loopPanelTitle}
+          onClose={() => setIsLoopPanelOpen(false)}
+        >
+          <textarea
+            value={playbackRange}
+            onChange={(e) => setPlaybackRange(e.target.value)}
+            placeholder={t.playbackControls.rangePlaceholder}
+            title={t.playbackControls.rangeTitle}
+            disabled={noScoreLoaded}
+            spellCheck={false}
+            className="kf-input"
+            style={{
+              width: '100%',
+              minWidth: '300px',
+              minHeight: '64px',
+              boxSizing: 'border-box',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+              fontSize: '0.8125rem',
+              resize: 'vertical',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+          />
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={handleClearRange}
+              disabled={noScoreLoaded || playbackRange === ''}
+              title={t.playbackControls.clearTitle}
+              className="kf-btn kf-btn--sm"
+            >
+              {t.playbackControls.clearButton}
+            </button>
+            <button
+              type="button"
+              onClick={handleResetRange}
+              disabled={noScoreLoaded}
+              title={t.playbackControls.resetTitle}
+              className="kf-btn kf-btn--sm"
+            >
+              {t.playbackControls.resetButton}
+            </button>
+          </div>
+        </LoopRangePanel>
+      )}
     </div>
   );
 };

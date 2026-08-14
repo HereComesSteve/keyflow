@@ -1605,9 +1605,9 @@ describe('OSMDController buildNoteIdMap 和音の符頭単位座標オフセッ�
       expect(text.getAttribute('paint-order')).toBe('stroke');
     }
 
-    // 未承認（提案中）でも薄い水色（旧: #93c5fd）ではなく濃色で描画される
+    // 未承認（提案中）でも淡色ではなく濃色（中灰）で描画される
     const suggested = texts.find((t) => t.textContent === '2')!;
-    expect(suggested.getAttribute('fill')).toBe('#1d4ed8');
+    expect(suggested.getAttribute('fill')).toBe('#52525b');
     // 承認済みは提案中と区別できる濃色
     const approved = texts.find((t) => t.textContent === '4')!;
     expect(approved.getAttribute('fill')).toBe('#15803d');

@@ -24,19 +24,6 @@ export interface QuickPanelProps {
   onFingeringEditModeChange?: (checked: boolean) => void;
 }
 
-const SECTION_LABEL_STYLE: React.CSSProperties = {
-  fontSize: '12px',
-  fontWeight: 600,
-  color: '#6b7280',
-  marginBottom: '4px',
-};
-
-const SECTION_STYLE: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-};
-
 /**
  * 「表示・補助」パネル（QuickPanel、TASK-074、design/components/header.md）。
  * ヘッダーの表示・補助ボタン押下時にPopover内で表示する。
@@ -66,17 +53,17 @@ export const QuickPanel: React.FC<QuickPanelProps> = ({
   return (
     <div
       data-testid="quick-panel"
-      style={{ display: 'flex', flexDirection: 'column', gap: '14px', minWidth: '240px' }}
+      style={{ display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '240px' }}
     >
-      <div style={SECTION_STYLE}>
-        <span style={SECTION_LABEL_STYLE}>{t.quickPanel.displaySection}</span>
+      <div className="kf-panel-section">
+        <span className="kf-panel-label">{t.quickPanel.displaySection}</span>
         <VolumeControl />
         <ZoomControl />
         <ScoreLayoutControl />
       </div>
 
-      <div style={SECTION_STYLE}>
-        <span style={SECTION_LABEL_STYLE}>{t.quickPanel.fingeringSection}</span>
+      <div className="kf-panel-section">
+        <span className="kf-panel-label">{t.quickPanel.fingeringSection}</span>
         <FingeringToggle />
         <FingeringEditToggle
           checked={fingeringEditMode ?? false}
@@ -89,13 +76,13 @@ export const QuickPanel: React.FC<QuickPanelProps> = ({
         />
       </div>
 
-      <div style={SECTION_STYLE}>
-        <span style={SECTION_LABEL_STYLE}>{t.quickPanel.statsSection}</span>
+      <div className="kf-panel-section">
+        <span className="kf-panel-label">{t.quickPanel.statsSection}</span>
         <StatsDisplay />
       </div>
 
-      <div style={SECTION_STYLE}>
-        <span style={SECTION_LABEL_STYLE}>{t.quickPanel.metronomeDetailSection}</span>
+      <div className="kf-panel-section">
+        <span className="kf-panel-label">{t.quickPanel.metronomeDetailSection}</span>
         <MetronomeAccentToggle />
       </div>
     </div>

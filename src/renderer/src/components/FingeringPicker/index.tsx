@@ -84,7 +84,7 @@ export const FingeringPicker: React.FC<FingeringPickerProps> = ({
               height: '30px',
               borderRadius: '4px',
               border: '1px solid #9ca3af',
-              backgroundColor: currentFinger === finger ? '#2563eb' : '#fff',
+              backgroundColor: currentFinger === finger ? '#18181b' : '#fff',
               color: currentFinger === finger ? '#fff' : '#111827',
               cursor: 'pointer',
               fontSize: '14px',

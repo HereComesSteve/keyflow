@@ -29,7 +29,7 @@ export const ZoomControl: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-      <label htmlFor="zoom-select" style={{ fontSize: '14px', color: '#374151' }}>
+      <label htmlFor="zoom-select" style={{ fontSize: '14px', color: 'var(--kf-text-2)' }}>
         {t.zoomControl.label}
       </label>
       <select
@@ -38,14 +38,7 @@ export const ZoomControl: React.FC = () => {
         value={String(zoom)}
         onChange={(e) => setZoom(Number(e.target.value))}
         title={t.zoomControl.title}
-        style={{
-          height: '44px',
-          fontSize: '15px',
-          padding: '0 8px',
-          borderRadius: '6px',
-          border: '1px solid #d1d5db',
-          cursor: 'pointer',
-        }}
+        className="kf-select"
       >
         {!isPreset && (
           <option value={zoom}>{Math.round(zoom * 100)}%</option>

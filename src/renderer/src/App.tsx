@@ -869,7 +869,7 @@ function App(): React.JSX.Element {
               left: 0,
               right: 0,
               textAlign: 'center',
-              color: '#2563eb',
+              color: '#18181b',
               fontSize: '14px',
               pointerEvents: 'none',
             }}
@@ -967,8 +967,8 @@ function App(): React.JSX.Element {
           style={{
             position: 'absolute',
             inset: 0,
-            border: '3px dashed #2563eb',
-            backgroundColor: 'rgba(37, 99, 235, 0.08)',
+            border: '3px dashed #18181b',
+            backgroundColor: 'rgba(24, 24, 27, 0.05)',
             pointerEvents: 'none',
             zIndex: 1000,
           }}
