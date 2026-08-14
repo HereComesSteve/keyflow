@@ -252,6 +252,143 @@
   color: #fff;
 }
 
+.kf-transport__btn--active {
+  background: var(--kf-accent);
+  border-color: var(--kf-accent);
+  color: #fff;
+}
+
+.kf-transport__btn--active:hover:not(:disabled) {
+  background: var(--kf-accent-hover);
+  border-color: var(--kf-accent-hover);
+  color: #fff;
+}
+
+/* ---------- 循环范围面板 ---------- */
+
+.kf-loop-panel {
+  position: fixed;
+  z-index: 900;
+  min-width: 300px;
+  max-width: 420px;
+  background: var(--kf-surface);
+  border: 1px solid var(--kf-border);
+  border-radius: var(--kf-radius);
+  box-shadow: var(--kf-shadow-pop);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  color: var(--kf-text);
+}
+
+.kf-loop-panel__titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--kf-surface-soft);
+  border-bottom: 1px solid var(--kf-border);
+  cursor: grab;
+  user-select: none;
+}
+
+.kf-loop-panel__title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--kf-text-2);
+}
+
+.kf-loop-panel__close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--kf-radius-xs);
+  color: var(--kf-text-3);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition:
+    background-color var(--kf-dur) var(--kf-ease),
+    color var(--kf-dur) var(--kf-ease);
+}
+
+.kf-loop-panel__close:hover {
+  background: var(--kf-surface-mute);
+  color: var(--kf-text);
+}
+
+.kf-loop-panel__body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kf-loop-panel__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--kf-surface-soft);
+  border: 1px solid var(--kf-border);
+  border-radius: var(--kf-radius-sm);
+  font-size: 13px;
+  color: var(--kf-text-2);
+  cursor: pointer;
+  transition:
+    border-color var(--kf-dur) var(--kf-ease),
+    background-color var(--kf-dur) var(--kf-ease);
+}
+
+.kf-loop-panel__check:hover {
+  background: var(--kf-surface);
+  border-color: var(--kf-border-strong);
+}
+
+.kf-loop-panel__textarea {
+  width: 100%;
+  min-width: 300px;
+  min-height: 72px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--kf-border-strong);
+  border-radius: var(--kf-radius-sm);
+  background: var(--kf-surface);
+  color: var(--kf-text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+  white-space: pre-wrap;
+  word-break: break-all;
+  transition:
+    border-color var(--kf-dur) var(--kf-ease),
+    box-shadow var(--kf-dur) var(--kf-ease);
+}
+
+.kf-loop-panel__textarea:focus {
+  outline: none;
+  border-color: var(--kf-accent);
+  box-shadow: var(--kf-ring);
+}
+
+.kf-loop-panel__textarea:disabled {
+  opacity: 0.55;
+  background: var(--kf-surface-soft);
+  cursor: not-allowed;
+}
+
+.kf-loop-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ---------- 分段控件 ---------- */
 
 .kf-seg {

@@ -15,6 +15,9 @@ export interface PlaybackSlice {
   /** 播放范围字符串（如 "1-3, 1-5"），空 = 原始顺序。用户手动展开反复记号。 */
   playbackRange: string;
   setPlaybackRange: (range: string) => void;
+  /** 序列循环开关：开启后播完小节序列末尾跳回序列开头，实现真正的循环播放。 */
+  playbackLoop: boolean;
+  setPlaybackLoop: (loop: boolean) => void;
 }
 
 export const createPlaybackSlice: StateCreator<PlaybackSlice> = (set) => ({
@@ -22,4 +25,6 @@ export const createPlaybackSlice: StateCreator<PlaybackSlice> = (set) => ({
   setPlaybackState: (playbackState) => set({ playbackState }),
   playbackRange: '',
   setPlaybackRange: (playbackRange) => set({ playbackRange }),
+  playbackLoop: false,
+  setPlaybackLoop: (playbackLoop) => set({ playbackLoop }),
 });

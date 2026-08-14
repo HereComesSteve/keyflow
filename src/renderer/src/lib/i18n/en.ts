@@ -118,6 +118,9 @@ export const en: Messages = {
     loopButton: 'Loop',
     loopButtonTitle: 'Open the playback loop panel',
     loopPanelTitle: 'Playback loop range',
+    loopToggleLabel: 'Loop playback',
+    loopToggleTitle:
+      'When enabled, playback jumps back to the start of the range after reaching its end',
     closeButton: 'Close',
   },
   tempoControl: {

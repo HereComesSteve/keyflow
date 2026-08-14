@@ -19,7 +19,7 @@ export interface UiSlice {
   zoom: number;
   pianoHeight: number;
   /**
-   * 楽譜ページの配置方向（vertical=縦積み / horizontal=横並び）。初期値'vertical'。
+   * 楽譜ページの配置方向（vertical=縦積み / horizontal=横並び）。初期値'horizontal'。
    * electron-store側のデフォルト（src/main/settings.ts DEFAULT_SETTINGS.ui.scoreLayout）
    * と一致させる。ScoreRenderer はこの値でページの並べ方を CSS のみで切り替える
    * （OSMD 再描画なし）。
@@ -134,7 +134,7 @@ export const createUiSlice: StateCreator<UiSlice> = (set, get) => ({
   metronomeEnabled: false,
   metronomeAccentEnabled: true,
   zoom: 1.0,
-  scoreLayout: 'vertical',
+  scoreLayout: 'horizontal',
   // electron-store側のデフォルト（src/main/settings.ts DEFAULT_SETTINGS.ui.pianoHeight）
   // と一致させる（TASK-045）。以前は150固定でelectron-storeの120と食い違っており、
   // 起動時ロードが実装されるまで不整合が隠蔽されていた。単一の値に揃えることで

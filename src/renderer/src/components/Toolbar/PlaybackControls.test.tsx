@@ -443,5 +443,18 @@ describe('PlaybackControls', () => {
       // 无反复记号时 reset 推导结果为空串
       expect(usePracticeStore.getState().playbackRange).toBe('');
     });
+
+    it('toggles the loop playback switch in the panel', () => {
+      usePracticeStore.setState({ playbackLoop: false });
+      render(<PlaybackControls audioEngine={createAudioEngineMock()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Loop' }));
+      const toggle = screen.getByRole('checkbox', { name: 'Loop playback' }) as HTMLInputElement;
+      expect(toggle.checked).toBe(false);
+
+      fireEvent.click(toggle);
+      expect(usePracticeStore.getState().playbackLoop).toBe(true);
+      expect(toggle.checked).toBe(true);
+    });
   });
 });

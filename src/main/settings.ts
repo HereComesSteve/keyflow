@@ -73,7 +73,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     volume: 80,
     showFingerings: true,
     keyboardSize: 88,
-    scoreLayout: 'vertical',
+    scoreLayout: 'horizontal',
   },
   practice: { defaultErrorMode: 'wait', metronomeEnabled: false, metronomeAccentEnabled: true },
   audio: { playbackVoice: 'grand-piano', metronomeVoice: 'click' },

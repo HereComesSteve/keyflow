@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { LibraryEntry } from '../../types/library';
 import { useTranslation } from '../../lib/i18n/useTranslation';
+import { usePracticeStore } from '../../store';
+import { GloveIcon } from '../icons/GloveIcon';
 import { formatMessage } from '../../lib/i18n/format';
 import {
   filterLibraryEntries,
@@ -31,6 +33,11 @@ interface LibraryViewProps {
    * 「楽譜へ戻る」ボタンを表示する。App.tsx側は楽譜読み込み済みのときのみ渡す。
    */
   onReturnToScore?: () => void;
+  /** 設定（歯車）ボタンクリック時に呼ばれる。ライブラリ画面はヘッダー非表示のため、
+   *  タイトル行に配置したボタンから設定モーダルを開く（App.tsx側が結線）。 */
+  onOpenSettings?: () => void;
+  /** 蓝牙手套连接面板ボタンクリック時に呼ばれる（ライブラリ画面のヘッダー非表示対策）。 */
+  onOpenGlove?: () => void;
 }
 
 const SORT_KEYS: readonly LibrarySortKey[] = ['title', 'addedAt', 'lastOpenedAt'];
@@ -189,6 +196,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   missingPaths,
   reloadSignal,
   onReturnToScore,
+  onOpenSettings,
+  onOpenGlove,
 }) => {
   const t = useTranslation();
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
@@ -310,6 +319,94 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     </button>
   ) : null;
 
+  // ライブラリ画面ではヘッダーが非表示のため、タイトル行に設定・手套ボタンを配置する。
+  // 手套ボタンはヘッダーと同じく接続状態に応じて緑点を表示する。
+  const isGloveConnected = usePracticeStore((s) => s.isConnected);
+  const headActions = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+      {/* 打开文件：仅列表状态显示（空状态已有带文字的"文件を開く"按钮，避免重复） */}
+      {entries.length > 0 && (
+        <button
+          type="button"
+          onClick={onOpenFileDialog}
+          aria-label={t.header.openFileAriaLabel}
+          title={t.header.openFileTitle}
+          data-testid="library-open-file-button"
+          className="kf-icon-btn"
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path>
+          </svg>
+        </button>
+      )}
+      {onOpenGlove && (
+        <button
+          type="button"
+          onClick={onOpenGlove}
+          aria-label={t.header.gloveButtonAriaLabel}
+          title={t.header.gloveButtonTitle}
+          data-testid="library-glove-button"
+          className={`kf-icon-btn ${isGloveConnected ? 'kf-icon-btn--active' : ''}`}
+          style={{ position: 'relative' }}
+        >
+          <GloveIcon />
+          {isGloveConnected && (
+            <span
+              data-testid="library-glove-connection-dot"
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                top: '4px',
+                right: '4px',
+                width: '8px',
+                height: '8px',
+                backgroundColor: '#16a34a',
+                borderRadius: '50%',
+                border: '1px solid #fff',
+                boxShadow: '0 0 0 2px var(--kf-header-bg, #f7f8fa)',
+              }}
+            />
+          )}
+        </button>
+      )}
+      {onOpenSettings && (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title={t.header.settingsTitle}
+          aria-label={t.header.settingsAriaLabel}
+          data-testid="library-settings-button"
+          className="kf-icon-btn"
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+
   const head = (
     <div className="kf-library__head">
       <h2 className="kf-library__title">
@@ -320,6 +417,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         )}
       </h2>
       <div className="kf-library__spacer" />
+      {headActions}
       {returnToScoreButton}
     </div>
   );

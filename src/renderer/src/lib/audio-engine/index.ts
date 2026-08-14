@@ -333,6 +333,8 @@ export class AudioEngineService {
   // 需要从当前位置之后的第一个 boundary 开始 schedule）。
   private _lastSetupScore: Score | null = null;
   private _lastSetupRange: string = '';
+  // 同上：最后一次接收的循环标志。重新调度时必须保持循环/非循环一致。
+  private _lastSetupLoop = false;
 
   // loadScore 构建好的 Tone.Part 事件数组（已含 pedal 延长后的 effectiveDuration），
   // 跳转后 transport.cancel() 会清掉 Part 内部调度事件，需要用它重建 Part。
@@ -975,15 +977,18 @@ export class AudioEngineService {
    * 例 "1-3, 1-3"（反复2次前3小节）：
    *   schedule endOfM3 → stop+seek(0)+start → schedule endOfM3 → stop
    *
+   * loop=true 时最后一段末尾不停止，改为跳回第一段开头继续播放（真正的小节序列循环）。
+   *
    * 必须在 playAccompaniment 之前调用。空字符串 = 原始顺序，不注册任何事件。
    */
-  setupPlaybackSequence(score: Score, range: string): void {
+  setupPlaybackSequence(score: Score, range: string, loop = false): void {
     this.ensureInitialized();
     this.clearSequenceEvents();
 
     // 存储 score 和 range，供 playAccompaniment(startTick) 重新调度时使用
     this._lastSetupScore = score;
     this._lastSetupRange = range;
+    this._lastSetupLoop = loop;
 
     if (!range || range.trim() === '') return;
 
@@ -1025,8 +1030,20 @@ export class AudioEngineService {
           nextStartTick,
           nextMeasure: nextSeg.start,
         });
+      } else if (loop) {
+        // 循环模式：最后一段末尾 → 跳回第一段开头（真正的小节序列循环）
+        const firstSeg = segments[0];
+        const firstStartMeasure = score.measures.find((m) => m.number === firstSeg.start);
+        const firstStartTick = firstStartMeasure ? firstStartMeasure.startTick : 0;
+        boundaries.push({
+          endTick,
+          endMeasureNumber: seg.end,
+          action: 'jump',
+          nextStartTick: firstStartTick,
+          nextMeasure: firstSeg.start,
+        });
       } else {
-        // 最后一段末尾 → 停止播放
+        // 非循环：最后一段末尾 → 停止播放
         boundaries.push({
           endTick,
           endMeasureNumber: seg.end,
@@ -1048,7 +1065,15 @@ export class AudioEngineService {
       while (ctx.boundaryIdx < boundaries.length && boundaries[ctx.boundaryIdx].endTick <= currentTicks) {
         ctx.boundaryIdx++;
       }
-      if (ctx.boundaryIdx >= boundaries.length) return;
+      if (ctx.boundaryIdx >= boundaries.length) {
+        if (loop && boundaries.length > 0) {
+          // 循环模式：一轮结束（最后一段已跳回第一段开头），从第一段 boundary 重新开始。
+          // 此时 transport.ticks 已回到第一段起点，endTick 均大于该点，不会死循环。
+          ctx.boundaryIdx = 0;
+        } else {
+          return;
+        }
+      }
       const b = boundaries[ctx.boundaryIdx];
 
       // 关键修复：jump boundary 的注册位置需要提前，提前量基于 Tone.js 源码确认的机制精准计算
@@ -1309,7 +1334,7 @@ export class AudioEngineService {
       // 导致跳转永远不会执行。这里重新调用 setupPlaybackSequence，让它根据当前
       // transport.ticks 跳过已过期的 boundary，从正确的位置开始 schedule。
       if (this._lastSetupScore && this._lastSetupRange.trim() !== '') {
-        this.setupPlaybackSequence(this._lastSetupScore, this._lastSetupRange);
+        this.setupPlaybackSequence(this._lastSetupScore, this._lastSetupRange, this._lastSetupLoop);
       }
     }
     transport.start();

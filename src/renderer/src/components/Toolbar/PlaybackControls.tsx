@@ -59,7 +59,7 @@ interface PlaybackControlsProps {
  * - 再生状態（playing/paused/stopped）は Zustand store で一元管理する
  */
 export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine, score }) => {
-  const { playbackState, setPlaybackState, voiceLoading, playbackRange, setPlaybackRange } =
+  const { playbackState, setPlaybackState, voiceLoading, playbackRange, setPlaybackRange, playbackLoop, setPlaybackLoop } =
     usePracticeStore();
   const t = useTranslation();
   const toneStartedRef = useRef(false);
@@ -243,18 +243,19 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
         onClick={() => setIsLoopPanelOpen((open) => !open)}
         disabled={noScoreLoaded}
         title={t.playbackControls.loopButtonTitle}
-        className="kf-btn kf-btn--sm"
-        style={
-          playbackRange !== ''
-            ? {
-                backgroundColor: '#2563eb',
-                color: '#fff',
-                borderColor: '#2563eb',
-                opacity: noScoreLoaded ? 0.5 : 1,
-              }
-            : undefined
-        }
+        className={[
+          'kf-transport__btn',
+          (playbackRange !== '' || isLoopPanelOpen) && 'kf-transport__btn--active',
+        ]
+          .filter(Boolean)
+          .join(' ')}
       >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m17 2 4 4-4 4" />
+          <path d="M3 12v-1a4 4 0 0 1 4-4h12" />
+          <path d="m7 22-4-4 4-4" />
+          <path d="M21 12v1a4 4 0 0 1-4 4H5" />
+        </svg>
         {t.playbackControls.loopButton}
       </button>
       {isLoopPanelOpen && (
@@ -262,6 +263,15 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
           title={t.playbackControls.loopPanelTitle}
           onClose={() => setIsLoopPanelOpen(false)}
         >
+          <label title={t.playbackControls.loopToggleTitle} className="kf-loop-panel__check">
+            <input
+              type="checkbox"
+              checked={playbackLoop}
+              onChange={(e) => setPlaybackLoop(e.target.checked)}
+              className="kf-check"
+            />
+            {t.playbackControls.loopToggleLabel}
+          </label>
           <textarea
             value={playbackRange}
             onChange={(e) => setPlaybackRange(e.target.value)}
@@ -269,20 +279,9 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
             title={t.playbackControls.rangeTitle}
             disabled={noScoreLoaded}
             spellCheck={false}
-            className="kf-input"
-            style={{
-              width: '100%',
-              minWidth: '300px',
-              minHeight: '64px',
-              boxSizing: 'border-box',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-              fontSize: '0.8125rem',
-              resize: 'vertical',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-            }}
+            className="kf-loop-panel__textarea"
           />
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div className="kf-loop-panel__actions">
             <button
               type="button"
               onClick={handleClearRange}
@@ -297,7 +296,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({ audioEngine,
               onClick={handleResetRange}
               disabled={noScoreLoaded}
               title={t.playbackControls.resetTitle}
-              className="kf-btn kf-btn--sm"
+              className="kf-btn kf-btn--sm kf-btn--primary"
             >
               {t.playbackControls.resetButton}
             </button>

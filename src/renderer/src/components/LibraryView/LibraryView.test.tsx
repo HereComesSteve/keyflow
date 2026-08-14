@@ -57,6 +57,68 @@ describe('LibraryView', () => {
     expect(onOpenEntry).toHaveBeenCalledWith('/scores/a.musicxml');
   });
 
+  it('renders settings/glove buttons in the head and invokes their callbacks', async () => {
+    libraryApi.getAll.mockResolvedValue([makeEntry({})]);
+    const onOpenSettings = vi.fn();
+    const onOpenGlove = vi.fn();
+
+    render(
+      <LibraryView
+        onOpenEntry={vi.fn()}
+        onOpenFileDialog={vi.fn()}
+        onOpenSettings={onOpenSettings}
+        onOpenGlove={onOpenGlove}
+      />
+    );
+
+    fireEvent.click(await screen.findByTestId('library-settings-button'));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('library-glove-button'));
+    expect(onOpenGlove).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render the settings/glove buttons when their callbacks are not provided', async () => {
+    libraryApi.getAll.mockResolvedValue([makeEntry({})]);
+
+    render(<LibraryView onOpenEntry={vi.fn()} onOpenFileDialog={vi.fn()} />);
+
+    await screen.findByText('Example');
+    expect(screen.queryByTestId('library-settings-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('library-glove-button')).not.toBeInTheDocument();
+  });
+
+  it('renders the open-file button in the head for the list state and invokes onOpenFileDialog', async () => {
+    libraryApi.getAll.mockResolvedValue([makeEntry({})]);
+    const onOpenFileDialog = vi.fn();
+
+    render(<LibraryView onOpenEntry={vi.fn()} onOpenFileDialog={onOpenFileDialog} />);
+
+    fireEvent.click(await screen.findByTestId('library-open-file-button'));
+    expect(onOpenFileDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render the head open-file button in the empty state (text button is used instead)', async () => {
+    libraryApi.getAll.mockResolvedValue([]);
+
+    render(<LibraryView onOpenEntry={vi.fn()} onOpenFileDialog={vi.fn()} />);
+
+    await screen.findByText('ファイルを開く');
+    expect(screen.queryByTestId('library-open-file-button')).not.toBeInTheDocument();
+  });
+
+  it('shows the connection dot on the library glove button when the glove is connected', async () => {
+    libraryApi.getAll.mockResolvedValue([makeEntry({})]);
+    usePracticeStore.setState({ isConnected: true });
+
+    render(
+      <LibraryView onOpenEntry={vi.fn()} onOpenFileDialog={vi.fn()} onOpenGlove={vi.fn()} />
+    );
+
+    await screen.findByTestId('library-glove-button');
+    expect(screen.getByTestId('library-glove-connection-dot')).toBeInTheDocument();
+  });
+
   it('filters the list by title/composer with a case-insensitive partial match (REQ-017-004)', async () => {
     libraryApi.getAll.mockResolvedValue([
       makeEntry({ path: '/a', title: 'Moonlight Sonata', composer: 'Beethoven' }),

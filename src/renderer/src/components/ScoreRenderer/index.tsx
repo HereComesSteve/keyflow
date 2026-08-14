@@ -140,8 +140,8 @@ export const ScoreRenderer: React.FC<ScoreRendererProps> = ({
   // 滚轮缩放 handler 需要读到最新的 zoom，用 ref 避免每次缩放都重绑监听
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
-  // 未指定时默认纵向（ScoreRenderer 测试等未传 scoreLayout 的场景）
-  const layout = scoreLayout ?? 'vertical';
+  // 未指定时默认横向（ScoreRenderer 测试等未传 scoreLayout 的场景）
+  const layout = scoreLayout ?? 'horizontal';
   const isHorizontal = layout === 'horizontal';
   // 切换布局方向时重置滚动位置，避免旧方向残留的 scrollTop/scrollLeft 导致跳页
   const prevLayoutRef = useRef(layout);

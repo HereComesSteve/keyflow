@@ -83,64 +83,29 @@ export const LoopRangePanel: React.FC<LoopRangePanelProps> = ({ title, onClose, 
       data-testid="loop-range-panel"
       role="dialog"
       aria-label={title}
+      className="kf-loop-panel"
       style={{
-        position: 'fixed',
         left: pos.x,
         top: pos.y,
-        zIndex: 900,
-        minWidth: '300px',
-        backgroundColor: '#fff',
-        border: '1px solid #e5e7eb',
-        borderRadius: '8px',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.12)',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
       }}
     >
       <div
         data-testid="loop-range-panel-title"
         onMouseDown={handleTitleMouseDown}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '8px',
-          padding: '8px 12px',
-          backgroundColor: '#f9fafb',
-          borderBottom: '1px solid #e5e7eb',
-          cursor: 'grab',
-          userSelect: 'none',
-        }}
+        className="kf-loop-panel__titlebar"
       >
-        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#374151' }}>{title}</span>
+        <span className="kf-loop-panel__title">{title}</span>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close"
           title="Close"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '24px',
-            height: '24px',
-            padding: 0,
-            backgroundColor: 'transparent',
-            border: 'none',
-            borderRadius: '4px',
-            color: '#6b7280',
-            cursor: 'pointer',
-            fontSize: '1rem',
-            lineHeight: 1,
-          }}
+          className="kf-loop-panel__close"
         >
           ×
         </button>
       </div>
-      <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        {children}
-      </div>
+      <div className="kf-loop-panel__body">{children}</div>
     </div>
   );
 };

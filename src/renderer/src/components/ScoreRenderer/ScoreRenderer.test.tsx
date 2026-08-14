@@ -127,7 +127,7 @@ describe('ScoreRenderer', () => {
     expect(osmdContainer.style.height).toBe('');
   });
 
-  it('keeps vertical layout by default (scroll column, container block)', () => {
+  it('keeps horizontal layout by default (scroll row, container flex-row)', () => {
     render(
       <ScoreRenderer
         score={mockScore}
@@ -136,6 +136,26 @@ describe('ScoreRenderer', () => {
         practiceMode="both"
         loopRange={null}
         zoom={1.0}
+        onNoteClick={() => {}}
+      />
+    );
+    const osmdContainer = screen.getByTestId('osmd-container');
+    const outerContainer = osmdContainer.parentElement as HTMLElement;
+    expect(outerContainer.style.flexDirection).toBe('row');
+    expect(osmdContainer.style.display).toBe('flex');
+    expect(osmdContainer.style.flexDirection).toBe('row');
+  });
+
+  it('switches to vertical layout (flex-column) when scoreLayout="vertical"', () => {
+    render(
+      <ScoreRenderer
+        score={mockScore}
+        musicXmlContent="<score-partwise/>"
+        currentNoteId={null}
+        practiceMode="both"
+        loopRange={null}
+        zoom={1.0}
+        scoreLayout="vertical"
         onNoteClick={() => {}}
       />
     );

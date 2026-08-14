@@ -684,6 +684,98 @@ describe('AudioEngineService', () => {
     });
   });
 
+  describe('setupPlaybackSequence (小节序列跳转/循环)', () => {
+    beforeEach(() => {
+      // 重置共享 mock transport 的 ticks：前一测试的 jump 回调会把 ticks 改为
+      // 段起点（如 3840），若不清空，单段范围的 endTick(=3839) 会被
+      // 「跳过过期 boundary」逻辑误判为已过期，导致不再注册 schedule。
+      (Tone.getTransport() as unknown as { ticks?: number }).ticks = 0;
+      (Tone.getTransport().schedule as Mock).mockClear();
+      (Tone.getTransport().stop as Mock).mockClear();
+      (Tone.getTransport().pause as Mock).mockClear();
+      (Tone.getTransport().start as Mock).mockClear();
+    });
+
+    // 3 小节乐谱：小节1(0..1919) / 小节2(1920..3839) / 小节3(3840..)
+    function makeThreeMeasureScore(): Score {
+      const score = makeScore();
+      score.measures.push({
+        number: 2,
+        startTick: 1920,
+        notes: [makeNote({ id: 'P1-M2-N0', startTick: 1920, durationTicks: 480 })],
+      });
+      score.measures.push({
+        number: 3,
+        startTick: 3840,
+        notes: [makeNote({ id: 'P1-M3-N0', startTick: 3840, durationTicks: 480 })],
+      });
+      return score;
+    }
+
+    it('registers jump boundaries between segments and a stop at the end when loop is off', () => {
+      service.setupPlaybackSequence(makeThreeMeasureScore(), '1-2, 3');
+
+      // 递归调度：初始只注册第1个 boundary（第1段末尾 jump）
+      const scheduleMock = Tone.getTransport().schedule as unknown as Mock;
+      expect(scheduleMock).toHaveBeenCalledTimes(1);
+      const firstBoundaryCallback = scheduleMock.mock.calls[0][0] as (time: number) => void;
+      firstBoundaryCallback(0);
+
+      // jump 触发后调度第2个 boundary（最后段 stop）
+      expect(scheduleMock).toHaveBeenCalledTimes(2);
+      const stopBoundaryCallback = scheduleMock.mock.calls[1][0] as (time: number) => void;
+      (Tone.getTransport().stop as Mock).mockClear();
+      stopBoundaryCallback(0);
+      expect(Tone.getTransport().stop).toHaveBeenCalled();
+    });
+
+    it('jumps back to the first segment start at the end when loop is on', () => {
+      const service2 = new AudioEngineService();
+      service2.setupPlaybackSequence(makeThreeMeasureScore(), '1-2, 3', true);
+
+      const scheduleMock = Tone.getTransport().schedule as unknown as Mock;
+      expect(scheduleMock).toHaveBeenCalledTimes(1);
+      const firstBoundaryCallback = scheduleMock.mock.calls[0][0] as (time: number) => void;
+      firstBoundaryCallback(0);
+      // jump 触发后调度最后段 boundary（loop 模式 = 回绕到第一段）
+      expect(scheduleMock).toHaveBeenCalledTimes(2);
+      const wrapBoundaryCallback = scheduleMock.mock.calls[1][0] as (time: number) => void;
+      (Tone.getTransport().pause as Mock).mockClear();
+      (Tone.getTransport().start as Mock).mockClear();
+      (Tone.getTransport().stop as Mock).mockClear();
+      wrapBoundaryCallback(0);
+
+      // 循环回绕走 jump 分支：pause + 重置 ticks + 重新 start，而非 stop
+      expect(Tone.getTransport().pause).toHaveBeenCalled();
+      expect(Tone.getTransport().stop).not.toHaveBeenCalled();
+      expect(Tone.getTransport().start).toHaveBeenCalled();
+    });
+
+    it('registers a stop (not a jump) at the end for a single-segment range when loop is off', () => {
+      service.setupPlaybackSequence(makeThreeMeasureScore(), '1-2');
+
+      const scheduleMock = Tone.getTransport().schedule as unknown as Mock;
+      expect(scheduleMock).toHaveBeenCalledTimes(1);
+      const stopBoundaryCallback = scheduleMock.mock.calls[0][0] as (time: number) => void;
+      stopBoundaryCallback(0);
+      expect(Tone.getTransport().stop).toHaveBeenCalled();
+    });
+
+    it('registers a jump back to the first segment when loop is on for a single-segment range', () => {
+      service.setupPlaybackSequence(makeThreeMeasureScore(), '1-2', true);
+
+      const scheduleMock = Tone.getTransport().schedule as unknown as Mock;
+      expect(scheduleMock).toHaveBeenCalledTimes(1);
+      const wrapBoundaryCallback = scheduleMock.mock.calls[0][0] as (time: number) => void;
+      (Tone.getTransport().pause as Mock).mockClear();
+      (Tone.getTransport().stop as Mock).mockClear();
+      wrapBoundaryCallback(0);
+
+      expect(Tone.getTransport().pause).toHaveBeenCalled();
+      expect(Tone.getTransport().stop).not.toHaveBeenCalled();
+    });
+  });
+
   describe('loadScore practiceMode filter (TASK-051, REQ-010-010)', () => {
     it('schedules all sounding notes (both hands) when practiceMode is "both" (default, backward compatible)', () => {
       service.loadScore(makeHandScore());

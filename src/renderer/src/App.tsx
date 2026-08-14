@@ -138,6 +138,7 @@ function App(): React.JSX.Element {
     playbackState,
     playbackRange,
     setPlaybackRange,
+    playbackLoop,
     activeView,
     setActiveView,
   } = usePracticeStore(
@@ -177,6 +178,7 @@ function App(): React.JSX.Element {
       playbackState: s.playbackState,
       playbackRange: s.playbackRange,
       setPlaybackRange: s.setPlaybackRange,
+      playbackLoop: s.playbackLoop,
       activeView: s.activeView,
       setActiveView: s.setActiveView,
     }))
@@ -758,7 +760,7 @@ function App(): React.JSX.Element {
         await audioEngine.ensurePlaybackVoiceLoaded();
         // 播放前设置小节跳转顺序（用户手动展开反复记号）
         if (score) {
-          audioEngine.setupPlaybackSequence(score, playbackRange);
+          audioEngine.setupPlaybackSequence(score, playbackRange, playbackLoop);
         }
         const startTick = practiceEngine.getCurrentPositionTick();
         audioEngine.playAccompaniment(startTick ?? undefined);
@@ -766,7 +768,7 @@ function App(): React.JSX.Element {
       pauseAccompaniment: () => audioEngine.pauseAccompaniment(),
       stopAccompaniment: () => audioEngine.stopAccompaniment(),
     }),
-    [audioEngine, practiceEngine, score, playbackRange]
+    [audioEngine, practiceEngine, score, playbackRange, playbackLoop]
   );
 
   // TASK-105: 楽譜表示への復帰導線（REQ-017-012）。楽譜読み込み済みかつ
@@ -786,8 +788,12 @@ function App(): React.JSX.Element {
     >
       {/* 1. Header: 1行ヘッダー（TASK-075、design/components/header.md）。
           頻用操作（開く/再生/停止/ループ/テンポ/練習対象）を常時表示し、
-          低頻度操作（音量・表示倍率・運指・メトロノーム・成績）はQuickPanelへ移設する。 */}
-      <div style={{ flexShrink: 0 }}>
+          低頻度操作（音量・表示倍率・運指・メトロノーム・成績）はQuickPanelへ移設する。
+          ライブラリ画面ではヘッダーを非表示（display:none）にし、楽譜画面のみ表示する。
+          コンポーネントはアンマウントせずCSSで隠す（ScoreRenderer/PianoKeyboardと
+          同パターン。App.test.tsxの多数の結線テストがHeaderの常時マウントを
+          前提としているため）。 */}
+      <div style={{ flexShrink: 0, display: activeView === 'score' ? 'block' : 'none' }}>
         <Header
           onOpenFile={handleOpenFile}
           onOpenSettings={() => setIsSettingsOpen(true)}
@@ -889,6 +895,8 @@ function App(): React.JSX.Element {
             missingPaths={missingLibraryPaths}
             reloadSignal={libraryReloadSignal}
             onReturnToScore={score ? () => setActiveView('score') : undefined}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            onOpenGlove={() => setIsGloveOpen(true)}
           />
         </div>
       )}
