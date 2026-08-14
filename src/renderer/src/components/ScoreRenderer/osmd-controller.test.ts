@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OSMDController, computeFingeringCoords } from './osmd-controller';
+import type { ScoreMapCache } from './osmd-controller';
 import type { Score, Note } from '../../types';
 
 /**
@@ -582,6 +583,137 @@ describe('OSMDController setGrayedOutNotes (REQ-002-007, note単位グレーア�
     expect(chordEl.style.opacity).toBe('0.5');
     controller.setGrayedOutNotes(new Set());
     expect(chordEl.style.opacity).toBe('0.9');
+  });
+
+  it('rebuilds noteIdToGraphicalNote from GraphicSheet after a cache hit (rebuildGrayoutNoteMap)', () => {
+    const { container } = makeContainerWithSvg();
+    const controller = new OSMDController(container);
+    // @ts-expect-error test mock access
+    controller.loaded = true;
+
+    const svgEl = makeSvgGElement();
+    const graphicalNote = {
+      sourceNote: {
+        halfTone: 0, // midiNumber = 0 + 12 = 12（makeScore の note と同じ）
+        ParentStaffEntry: {
+          ParentStaff: { Id: 1 }, // staff = 1
+          AbsoluteTimestamp: { RealValue: 0 }, // absoluteTick = 0
+        },
+      },
+      getSVGGElement: vi.fn(() => svgEl),
+    };
+    // @ts-expect-error test mock access
+    controller.osmd = {
+      GraphicSheet: {
+        MusicPages: [
+          {
+            MusicSystems: [
+              {
+                graphicalMeasures: [
+                  [
+                    {
+                      MeasureNumber: 1,
+                      staffEntries: [{ graphicalVoiceEntries: [{ notes: [graphicalNote] }] }],
+                    },
+                  ],
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const score = makeScore([{ number: 1, noteIds: ['P1-M1-N0'] }]);
+    // @ts-expect-error test mock access to private rebuild method
+    controller.rebuildGrayoutNoteMap(score);
+
+    // @ts-expect-error test mock access to private noteId->GraphicalNote map
+    expect(controller.noteIdToGraphicalNote.get('P1-M1-N0')).toBe(graphicalNote);
+  });
+
+  it('applies grayout on the cache-hit path (applyCache → rebuild → dims the SVG element)', () => {
+    const { container } = makeContainerWithSvg();
+    const controller = new OSMDController(container);
+    // @ts-expect-error test mock access
+    controller.loaded = true;
+
+    const svgEl = makeSvgGElement();
+    const graphicalNote = {
+      sourceNote: {
+        halfTone: 0,
+        ParentStaffEntry: {
+          ParentStaff: { Id: 1 },
+          AbsoluteTimestamp: { RealValue: 0 },
+        },
+      },
+      getSVGGElement: vi.fn(() => svgEl),
+    };
+    // @ts-expect-error test mock access
+    controller.osmd = {
+      cursor: { Hidden: true },
+      GraphicSheet: {
+        MusicPages: [
+          {
+            MusicSystems: [
+              {
+                graphicalMeasures: [
+                  [
+                    {
+                      MeasureNumber: 1,
+                      staffEntries: [{ graphicalVoiceEntries: [{ notes: [graphicalNote] }] }],
+                    },
+                  ],
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const score = makeScore([{ number: 1, noteIds: ['P1-M1-N0'] }]);
+    const cache: ScoreMapCache = {
+      version: 2,
+      pageFormat: 'A4_P',
+      zoomBase: 1.0,
+      noteIdToCursorState: { 'P1-M1-N0': { iteratorIndex: 0 } },
+      noteIdToSvgCoord: { 'P1-M1-N0': { x: 0, y: 0, pageIndex: 0 } },
+      iteratorIndexToCursorStyle: {},
+    };
+
+    expect(controller.applyCache(score, cache, 1.0)).toBe(true);
+
+    controller.setGrayedOutNotes(new Set(['P1-M1-N0']), 0.5);
+    expect(graphicalNote.getSVGGElement).toHaveBeenCalled();
+    expect(svgEl.style.opacity).toBe('0.5');
+
+    controller.setGrayedOutNotes(new Set());
+    expect(svgEl.style.opacity).toBe('');
+  });
+
+  it('keeps applyCache working when GraphicSheet is absent (rebuild is a defensive no-op)', () => {
+    const { container } = makeContainerWithSvg();
+    const controller = new OSMDController(container);
+    // @ts-expect-error test mock access
+    controller.loaded = true;
+    // @ts-expect-error test mock access
+    controller.osmd = { cursor: { Hidden: true } };
+
+    const score = makeScore([{ number: 1, noteIds: ['P1-M1-N0'] }]);
+    const cache: ScoreMapCache = {
+      version: 2,
+      pageFormat: 'A4_P',
+      zoomBase: 1.0,
+      noteIdToCursorState: { 'P1-M1-N0': { iteratorIndex: 0 } },
+      noteIdToSvgCoord: { 'P1-M1-N0': { x: 0, y: 0, pageIndex: 0 } },
+      iteratorIndexToCursorStyle: {},
+    };
+
+    expect(() => controller.applyCache(score, cache, 1.0)).not.toThrow();
+    expect(controller.applyCache(score, cache, 1.0)).toBe(true);
+    // 灰化は単に何もしない（落ちない）
+    expect(() => controller.setGrayedOutNotes(new Set(['P1-M1-N0']))).not.toThrow();
   });
 });
 

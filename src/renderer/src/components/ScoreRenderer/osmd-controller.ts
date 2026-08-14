@@ -127,6 +127,22 @@ interface OsmdGraphicalMeasure {
 }
 
 /**
+ * rebuildGrayoutNoteMap で使う OSMD の GraphicalMeasure の最小限の構造的型。
+ * staffEntries → graphicalVoiceEntries → notes（GraphicalNote）を辿って
+ * noteId→GraphicalNote マップを再構築する。GraphicalStaffEntry は同一タイム
+ * スタンプの垂直音符群（buildNoteIdMap の cursor 1 ステップと対応する）ため、
+ * describeOsmdNote + matchNotesForTimestamp の既存照合ロジックを再利用できる。
+ */
+interface OsmdGraphicalMeasureNotes {
+  MeasureNumber?: number;
+  staffEntries?: Array<{
+    graphicalVoiceEntries?: Array<{
+      notes?: Array<{ sourceNote?: OsmdCursorNote }>;
+    }>;
+  }>;
+}
+
+/**
  * VexFlowGraphicalNote固有のSVG要素取得API（`getSVGGElement`）を表す構造的型（TASK-060）。
  * このAPIはOSMDのVexFlowバックエンド実装（VexFlowGraphicalNote）のみが持ち、
  * 基底クラスの`GraphicalNote`型には定義がないため、依存を最小化する目的で
@@ -311,6 +327,11 @@ export class OSMDController {
     (this.osmd as unknown as { setOptions: (opts: Record<string, unknown>) => void }).setOptions({
       pageFormat: 'A4_P',
     });
+    // 光标遍历不跟随反复记号（与 GraphicSheet 渲染一致，只走一遍）。
+    // 否则 buildNoteIdMap 会把反复段的小节重放一遍，二次遍历时对应小节
+    // 的候选音符已被消耗，导致一堆 "could not resolve a matching Note" 警告
+    // （音符本身不丢，只是重复遍历 + 噪音日志 + 首次导入更慢）。
+    this.osmd.EngravingRules.CursorIgnoreRepetitions = true;
     await this.osmd.load(normalized);
     const t2 = performance.now();
     this.osmd.render();
@@ -1514,10 +1535,10 @@ export class OSMDController {
    * 生成されているため、ズーム値が異なる場合はこのマップだけ採用をスキップ。
    * viewBox 座標系の noteIdToCursorState / noteIdToSvgCoord は常に採用可能。
    *
-   * 注意：noteIdToGraphicalNote は「オブジェクト参照」を格納するためキャッシュ
-   * できない。applyCache 後は空のままとなり、グレーアウト（renderGrayoutLayer）
-   * は「要素なし」としてスキップされる。この不整合は Task 5（SVG DOM 座標マッチング）
-   * で解消する。
+   * グレーアウト（renderGrayoutLayer）が使う noteIdToGraphicalNote は「オブジェクト
+   * 参照」を格納するためシリアライズできないが、rebuildGrayoutNoteMap が
+   * GraphicSheet を直接走査して再構築する（cursor.next() の逐次移動を伴わないため
+   * ミリ秒級。applyCache 成功時に呼び出す）。
    *
    * @param currentZoom 現在の OSMD 側ズーム。分頁モードでは osmd.zoom が実際のズーム値。
    */
@@ -1558,7 +1579,93 @@ export class OSMDController {
         `iteratorIndexToCursorStyle=${this.iteratorIndexToCursorStyle.size} ` +
         `(cursorStylesMatch=${cursorStylesMatch} cache.zoomBase=${cache.zoomBase} current=${currentZoom})`
     );
+
+    // グレーアウト用の noteId→GraphicalNote を GraphicSheet から再構築する
+    // （GraphicalNote はオブジェクト参照のためキャッシュ不能。cursor 非依存の
+    // 直接走査でミリ秒級に済む。buildNoteIdMap 完了済みの経路では既に構築済み）。
+    this.rebuildGrayoutNoteMap(score);
     return true;
+  }
+
+  /**
+   * 缓存命中（applyCache）后重建 noteIdToGraphicalNote（灰化用の noteId→SVG 元素）。
+   *
+   * GraphicalNote 是对象引用无法序列化，但 renderGrayoutLayer 只依赖它。与
+   * collectMeasureRects 相同，直接遍历 GraphicSheet（MusicPages → MusicSystems →
+   * graphicalMeasures → staffEntries → graphicalVoiceEntries.notes），不经过
+   * cursor.next() 逐音符推进（那正是 buildNoteIdMap 十几秒的瓶颈），因此是毫秒级。
+   *
+   * 每个 GraphicalStaffEntry 是同一时间戳的垂直音符组（与 buildNoteIdMap 的
+   * cursor 一步对应），因此可复用 describeOsmdNote + matchNotesForTimestamp 的
+   * 既有照合逻辑，把 GraphicalNote.sourceNote 对应到 parser noteId。
+   * 匹配不上（tick 累积误差等）的音符静默跳过，其余正常灰化（尽力而为）。
+   */
+  private rebuildGrayoutNoteMap(score: Score): void {
+    this.noteIdToGraphicalNote.clear();
+    if (!this.loaded) return;
+
+    try {
+      const gsheet = (this.osmd as unknown as {
+        GraphicSheet?: {
+          MusicPages?: Array<{
+            MusicSystems?: Array<{ graphicalMeasures?: OsmdGraphicalMeasureNotes[][] }>;
+          }>;
+        };
+      }).GraphicSheet;
+
+      // 与 buildNoteIdMap 相同的「未消费 candidate 按小节分组」。
+      // 匹配成功后从候选移除，避免同一音符被重复分配。
+      const remainingNotesByMeasure = new Map<number, Note[]>();
+      for (const measure of score.measures) {
+        remainingNotesByMeasure.set(measure.number, [...measure.notes]);
+      }
+
+      let rebuilt = 0;
+      const pages = gsheet?.MusicPages ?? [];
+      for (const page of pages) {
+        for (const system of page.MusicSystems ?? []) {
+          const measureRows = system.graphicalMeasures ?? [];
+          for (const gmRow of measureRows) {
+            for (const gm of gmRow) {
+              if (!gm) continue;
+              const measureNumber = gm.MeasureNumber;
+              if (typeof measureNumber !== 'number' || !Number.isInteger(measureNumber)) continue;
+              const candidates = remainingNotesByMeasure.get(measureNumber);
+              if (!candidates || candidates.length === 0) continue;
+
+              for (const gse of gm.staffEntries ?? []) {
+                const osmdEntries: OsmdNoteEntry[] = [];
+                const graphicalNotes: Array<{ sourceNote?: OsmdCursorNote }> = [];
+                for (const gve of gse.graphicalVoiceEntries ?? []) {
+                  for (const gn of gve.notes ?? []) {
+                    if (!gn.sourceNote) continue;
+                    osmdEntries.push(this.describeOsmdNote(gn.sourceNote, score.ticksPerQuarter));
+                    graphicalNotes.push(gn);
+                  }
+                }
+                if (osmdEntries.length === 0) continue;
+
+                const matched = this.matchNotesForTimestamp(osmdEntries, candidates);
+                matched.forEach((note, i) => {
+                  if (!note) return;
+                  // 运行时是真实 GraphicalNote 实例（duck typing），仅做类型断言
+                  this.noteIdToGraphicalNote.set(
+                    note.id,
+                    graphicalNotes[i] as unknown as GraphicalNote
+                  );
+                  rebuilt++;
+                  const idx = candidates.indexOf(note);
+                  if (idx >= 0) candidates.splice(idx, 1);
+                });
+              }
+            }
+          }
+        }
+      }
+      console.log(`[perf] rebuildGrayoutNoteMap: rebuilt ${rebuilt} notes (cache-hit path)`);
+    } catch (e) {
+      console.warn('[OSMDController] rebuildGrayoutNoteMap failed:', e);
+    }
   }
 
   /**
