@@ -33,7 +33,7 @@ describe('LibraryView', () => {
     usePracticeStore.setState({ language: 'ja' });
   });
 
-  it('renders title, composer, and last opened date for each entry (REQ-017-003)', async () => {
+  it('renders title, composer and last opened date for each entry (REQ-017-003)', async () => {
     libraryApi.getAll.mockResolvedValue([
       makeEntry({ path: '/a', title: 'Moonlight Sonata', composer: 'Beethoven' }),
     ]);
@@ -88,7 +88,7 @@ describe('LibraryView', () => {
     expect(screen.queryByTestId('library-glove-button')).not.toBeInTheDocument();
   });
 
-  it('renders the open-file button in the head for the list state and invokes onOpenFileDialog', async () => {
+  it('renders the open-file button in the top bar and invokes onOpenFileDialog', async () => {
     libraryApi.getAll.mockResolvedValue([makeEntry({})]);
     const onOpenFileDialog = vi.fn();
 
@@ -98,13 +98,13 @@ describe('LibraryView', () => {
     expect(onOpenFileDialog).toHaveBeenCalledTimes(1);
   });
 
-  it('does not render the head open-file button in the empty state (text button is used instead)', async () => {
+  it('renders the top bar open-file button even in the empty state', async () => {
     libraryApi.getAll.mockResolvedValue([]);
 
     render(<LibraryView onOpenEntry={vi.fn()} onOpenFileDialog={vi.fn()} />);
 
-    await screen.findByText('ファイルを開く');
-    expect(screen.queryByTestId('library-open-file-button')).not.toBeInTheDocument();
+    await screen.findByText('ライブラリに楽譜がありません');
+    expect(screen.getByTestId('library-open-file-button')).toBeInTheDocument();
   });
 
   it('shows the connection dot on the library glove button when the glove is connected', async () => {
@@ -145,7 +145,7 @@ describe('LibraryView', () => {
     render(<LibraryView onOpenEntry={vi.fn()} onOpenFileDialog={vi.fn()} />);
     await screen.findByText('Newer');
 
-    const rows = screen.getAllByRole('row').slice(1); // 先頭はヘッダー行
+    const rows = screen.getAllByRole('row');
     expect(within(rows[0]).getByText('Newer')).toBeInTheDocument();
     expect(within(rows[1]).getByText('Older')).toBeInTheDocument();
   });
@@ -165,7 +165,7 @@ describe('LibraryView', () => {
     fireEvent.click(screen.getByLabelText('順序'));
     fireEvent.click(screen.getByRole('option', { name: '昇順' }));
 
-    const rows = screen.getAllByRole('row').slice(1);
+    const rows = screen.getAllByRole('row');
     expect(within(rows[0]).getByText('Apple')).toBeInTheDocument();
     expect(within(rows[1]).getByText('Banana')).toBeInTheDocument();
   });
