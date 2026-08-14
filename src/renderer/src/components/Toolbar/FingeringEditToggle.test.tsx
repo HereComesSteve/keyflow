@@ -5,16 +5,16 @@ import { FingeringEditToggle } from './FingeringEditToggle';
 import { usePracticeStore } from '../../store';
 
 // 指法编辑模式开关（受控组件：checked/onChange 由 App 持有）。
-// 文案按项目约定在 ja/en 两个语言下都使用英文。
+// ja 显示日语文案（'運指編集'），ON/OFF 状态沿用英文（日语习惯用法）。
 
 describe('FingeringEditToggle', () => {
   beforeEach(() => {
     usePracticeStore.setState({ language: 'ja' });
   });
 
-  it('shows the "Edit fingering" label', () => {
+  it('shows the "運指編集" label', () => {
     render(<FingeringEditToggle checked={false} onChange={() => {}} />);
-    expect(screen.getByText('Edit fingering')).toBeInTheDocument();
+    expect(screen.getByText('運指編集')).toBeInTheDocument();
   });
 
   it('reflects the checked state via aria-pressed and the ON/OFF status text', () => {

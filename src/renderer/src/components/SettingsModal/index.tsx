@@ -93,7 +93,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   // 上書きしない。表示専用の値であり、保存はupdateUiSetting呼び出し時のみ行う。
   const currentLanguage = usePracticeStore((s) => s.language);
   const languageSelectValue: Language =
-    settings.ui.language === 'ja' || settings.ui.language === 'en'
+    settings.ui.language === 'ja' || settings.ui.language === 'en' || settings.ui.language === 'zh'
       ? settings.ui.language
       : currentLanguage;
 
@@ -487,6 +487,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   options={[
                     { value: 'ja', label: t.settings.languageOptionJapanese },
                     { value: 'en', label: t.settings.languageOptionEnglish },
+                    { value: 'zh', label: t.settings.languageOptionChinese },
                   ]}
                   style={{ width: '100%' }}
                 />

@@ -705,7 +705,7 @@ describe('SettingsModal', () => {
         return Promise.resolve(undefined);
       });
 
-    it('shows self-representation fixed options ("日本語"/"English") regardless of the current display language', async () => {
+    it('shows self-representation fixed options ("日本語"/"English"/"中文") regardless of the current display language', async () => {
       usePracticeStore.setState({ language: 'en' });
       settingsApi.get.mockImplementation(mockGetWithUi({ language: 'ja' }));
       settingsApi.getRecentFiles.mockResolvedValue([]);
@@ -717,6 +717,27 @@ describe('SettingsModal', () => {
       fireEvent.click(trigger);
       expect(screen.getByRole('option', { name: '日本語' })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: 'English' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: '中文' })).toBeInTheDocument();
+    });
+
+    it('switching to 中文 updates the ui-slice language to zh and persists ui.language via settings:set', async () => {
+      settingsApi.get.mockImplementation(mockGetWithUi({ language: 'ja' }));
+      settingsApi.getRecentFiles.mockResolvedValue([]);
+      settingsApi.set.mockResolvedValue(undefined);
+
+      render(<SettingsModal isOpen onClose={vi.fn()} />);
+
+      const trigger = await screen.findByLabelText('言語');
+      await waitFor(() => expect(trigger).toHaveTextContent('日本語'));
+
+      fireEvent.click(trigger);
+      fireEvent.click(screen.getByRole('option', { name: '中文' }));
+
+      await waitFor(() => expect(usePracticeStore.getState().language).toBe('zh'));
+      expect(settingsApi.set).toHaveBeenCalledWith(
+        'ui',
+        expect.objectContaining({ language: 'zh' })
+      );
     });
 
     it('changing the language selector updates the ui-slice language immediately and persists ui.language via settings:set', async () => {

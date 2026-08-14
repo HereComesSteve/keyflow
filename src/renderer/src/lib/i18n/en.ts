@@ -32,6 +32,7 @@ export const en: Messages = {
     languageTitle: 'Switch the display language (applies immediately, no restart needed)',
     languageOptionJapanese: '日本語',
     languageOptionEnglish: 'English',
+    languageOptionChinese: '中文',
     midiSectionTitle: 'MIDI',
     midiDeviceLabel: 'MIDI input device',
     midiDeviceTitle: 'Select the MIDI input device to use (when multiple are connected)',

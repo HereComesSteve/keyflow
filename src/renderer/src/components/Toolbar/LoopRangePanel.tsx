@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from '../../lib/i18n/useTranslation';
 
 interface DragState {
   startX: number;
@@ -26,6 +27,7 @@ export interface LoopRangePanelProps {
  * - 閉じるボタンはタイトルバー右端に配置。Escape キーでも閉じる。
  */
 export const LoopRangePanel: React.FC<LoopRangePanelProps> = ({ title, onClose, children }) => {
+  const t = useTranslation();
   const [pos, setPos] = useState<{ x: number; y: number }>(() => {
     // 初期位置: 画面右上（ヘッダー直下）に表示。ウィンドウ幅に依存して端からはみ出さないようにする。
     const x = Math.max(8, window.innerWidth - 440);
@@ -98,8 +100,8 @@ export const LoopRangePanel: React.FC<LoopRangePanelProps> = ({ title, onClose, 
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close"
-          title="Close"
+          aria-label={t.playbackControls.closeButton}
+          title={t.playbackControls.closeButton}
           className="kf-loop-panel__close"
         >
           ×
