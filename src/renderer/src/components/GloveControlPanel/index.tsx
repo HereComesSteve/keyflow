@@ -538,9 +538,14 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
         const completeMsg = formatMessage(t.glove.logWriteComplete, { count: sentCount });
         const timeMsg = formatMessage(t.glove.logWriteTotalTime, { seconds: elapsedSec });
+        // 【丢包诊断】预期写入字节数 = (乐谱条数 + 结束标志) × 2，
+        // 与固件串口打印的 "Bytes written" 对照：不等即链路丢包。
+        const expectedBytes = (parsed.pairs.length + 1) * 2;
+        const expectMsg = `[${ts()}] [诊断] 预期写入字节数: ${expectedBytes}（乐谱 ${parsed.pairs.length} 条 + 结束标志）`;
         setWriteStatus(`${completeMsg} (${timeMsg})`);
         addGloveLog(`[${ts()}] ${completeMsg} ${timeMsg}`);
-        console.log(`[乐谱写入] 写入完成，总耗时: ${(Date.now() - startTime) / 1000}s，共 ${sentCount} 条`);
+        addGloveLog(expectMsg);
+        console.log(`[乐谱写入] 写入完成，总耗时: ${(Date.now() - startTime) / 1000}s，共 ${sentCount} 条，预期字节数 ${expectedBytes}`);
       } else {
         // 取消后：清空输入数据，不残留未发送指令
         setScoreInput('');

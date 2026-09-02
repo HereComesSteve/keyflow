@@ -26,10 +26,11 @@ const GLOVE_SCAN_TIMEOUT_MS = 60000;
 
 /**
  * 每条指令发送间隔（ms）。
- * 9600 baud 下单条指令传输约 4ms，5ms 足够让 BLE 缓冲区排空。
- * 870 条指令写入时间从 43 秒降到约 4.35 秒。
+ * 50ms：主机用 SoftwareSerial 转发给从机时 write() 期间会关闭中断，
+ * 间隔太短会撞上关中断窗口导致丢字节。固件已提速到 38400（转发窗口 4.2ms→1.05ms），
+ * 50ms 间隔下碰撞概率约 2%；验证稳定后可尝试下调到 30ms 加快传输。
  */
-const SEND_INTERVAL_MS = 5;
+const SEND_INTERVAL_MS = 50;
 
 /**
  * 振動手套（左手套・マスター）のBluetooth接続をカプセル化する。
