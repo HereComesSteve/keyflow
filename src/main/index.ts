@@ -88,17 +88,27 @@ function createWindow(): void {
     event.preventDefault();
     pendingBluetoothCallback = callback;
 
+    // 过滤：排除无广播名设备，以及名称被标记为「未知/不支持」的设备。
+    // 保留所有有正常名称的设备——用户模块名不一定以 "Glove" 开头。
+    const filtered = deviceList.filter((d) => {
+      const name = (d.deviceName ?? '').trim();
+      if (name.length === 0) return false;
+      // Electron/系统对无有效名称的设备可能回填「未知或不支持的设备」等占位名
+      if (/未知|不支持|未知或不支持|unknown|Unspecified|Not Supported/i.test(name)) return false;
+      return true;
+    });
+
     // 診断用: 発見されたデバイス名をターミナルへ出力（実機名確認用）
-    if (deviceList.length > 0) {
+    if (filtered.length > 0) {
       console.log(
         '[bluetooth] discovered devices:',
-        deviceList.map((d) => `${d.deviceName}(${d.deviceId})`)
+        filtered.map((d) => `${d.deviceName}(${d.deviceId})`)
       );
     }
 
     mainWindow.webContents.send(
       'bluetooth:devices-updated',
-      deviceList.map((d) => ({ deviceId: d.deviceId, deviceName: d.deviceName }))
+      filtered.map((d) => ({ deviceId: d.deviceId, deviceName: d.deviceName }))
     );
   });
 

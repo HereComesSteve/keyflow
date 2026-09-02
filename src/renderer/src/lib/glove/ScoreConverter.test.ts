@@ -133,7 +133,6 @@ describe('ScoreConverter', () => {
       // 60 90  C5 On (abs=96, rel=96)
       // 7F 00  弱起小节空指令 (abs=127, rel=127)
       // 00 10  C5 Off (abs=128, rel=0) ← 第 2 小节 relTick 重新从 0 开始
-      // FF 00  结束标志
       const expected = [
         '00 81', // C4 On
         '20 01', // C4 Off
@@ -144,7 +143,6 @@ describe('ScoreConverter', () => {
         '60 90', // C5 On
         '7F 00', // 弱起小节空指令
         '00 10', // C5 Off (relTick = 128 % 128 = 0)
-        'FF 00', // 结束
       ].join(' ');
 
       expect(result.data).toBe(expected);
@@ -180,7 +178,7 @@ describe('ScoreConverter', () => {
 
       const result = convertScoreToGloveCommands(score, [], 'right');
 
-      expect(result.data).toBe('FF 00');
+      expect(result.data).toBe('');
       expect(result.noteCount).toBe(0);
       expect(result.instructionCount).toBe(0);
     });
@@ -191,7 +189,7 @@ describe('ScoreConverter', () => {
       const result = convertScoreToGloveCommands(score, createCmajorAnnotations(), 'left');
 
       expect(result.noteCount).toBe(0);
-      expect(result.data).toBe('FF 00');
+      expect(result.data).toBe('');
     });
 
     it('同 tick 多手指应 OR 合并', () => {
@@ -879,7 +877,7 @@ describe('ScoreConverter', () => {
 
       expect(result.noteCount).toBe(0);
       expect(result.warnings.length).toBeGreaterThan(0);
-      expect(result.data).toBe('FF 00');
+      expect(result.data).toBe('');
     });
 
     it('不存在的小节号跳过并添加警告', () => {

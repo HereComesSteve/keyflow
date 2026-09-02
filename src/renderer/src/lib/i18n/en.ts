@@ -303,6 +303,8 @@ export const en: Messages = {
     logWriteEnd: 'End marker',
     logWriteComplete: 'Write complete! Sent {count} commands',
     logWriteTotalTime: 'Total time: {seconds}s',
+    logWriteResult: 'Write result: {bytes}/{expected} bytes, CRC {crc}, retries {retries}',
+    logWriteErrorCrc: 'CRC FAIL: written bytes != expected, please retry',
     logWriteCancelled: 'Write cancelled (sent {sent}/{total} commands)',
     logWriteError: 'Write failed: {error}',
     bpmSection: 'BPM setting',
@@ -352,5 +354,9 @@ export const en: Messages = {
     importSuccess: 'Imported {notes} notes → {instructions} commands',
     sramCapacityWarning: 'SRAM supports max 32 instructions, current {count}. Excess will be discarded.',
     importStatus: 'Imported from score',
+    slaveLinkAlive: 'Slave link OK',
+    slaveLinkLost: 'Slave link LOST',
+    slaveLinkRestored: 'Slave link restored',
+    syncComplete: 'Time sync done: RTT {rtt}us, offset {offset}us',
   },
 };

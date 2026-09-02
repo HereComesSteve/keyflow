@@ -9,14 +9,14 @@
  * 5. 按绝对 tick 排序，同 tick Off 在前
  * 6. 空小节处理（为所有没有指令的小节插入占位空指令）
  * 7. 递归补丁算法（处理固件跨小节检测问题）
- * 8. 格式化为 "relTick motorCtrl ... FF 00" 字符串
+ * 8. 格式化为 "relTick motorCtrl ..." 纯数据字符串
  */
 
 import type { Score, Annotation, Finger } from '../../types';
 
 /** 转换结果。 */
 export interface ConvertResult {
-  /** "00 81 10 82 ... FF 00" 格式的纯数据字符串 */
+  /** "00 81 10 82 ..." 格式的纯数据字符串 */
   data: string;
   /** 参与转换的音符数量（有指法的） */
   noteCount: number;
@@ -340,7 +340,7 @@ export function convertScoreToGloveCommands(
     measureSequence = parseRange(range ?? '');
   } catch (e) {
     return {
-      data: 'FF 00',
+      data: '',
       noteCount: 0,
       instructionCount: 0,
       skippedNotes: 0,
@@ -440,7 +440,7 @@ export function convertScoreToGloveCommands(
 
   if (noteCount === 0) {
     return {
-      data: 'FF 00',
+      data: '',
       noteCount: 0,
       instructionCount: 0,
       skippedNotes,
@@ -492,14 +492,13 @@ export function convertScoreToGloveCommands(
   for (const cmd of patchedCommands) {
     outputParts.push(`${hex2(cmd.relTick)} ${hex2(cmd.motorCtrl)}`);
   }
-  // 追加结束标志
-  outputParts.push('FF 00');
+  // 协议重构后：数据长度已在 WRITE_BEGIN 预声明，数据区不再追加结束标志
 
   // === 诊断日志：最终输出 ===
   console.log(`空小节+补丁处理后指令数: ${patchedCommands.length}`);
-  console.log(`最终指令数（含 FF 00 前）: ${patchedCommands.length}`);
+  console.log(`最终指令数: ${patchedCommands.length}`);
   console.log(`是否超过 SRAM 限制(32): ${patchedCommands.length > 32 ? '是 ⚠️' : '否'}`);
-  console.log(`输出字节数: ${outputParts.length * 2} (不含 FF 00), 总 token 数: ${outputParts.length}`);
+  console.log(`输出字节数: ${outputParts.length * 2} , 总 token 数: ${outputParts.length}`);
   if (warnings.length > 0) {
     console.log(`警告: ${warnings.join('; ')}`);
   }

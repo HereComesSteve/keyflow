@@ -1,105 +1,26 @@
 /**
- * 振动手套的硬件指令定义（4 字节十六进制）。
+ * 振动手套的纯工具与常量（协议无关部分）。
  *
- * 所有指令通过已连接的 Write 特性（0000fff2-...）以 writeValue 发送。
- * 指令格式固定为 F9 [cmd] [arg] 00。本文件只负责字节组装，不负责发送
- * （发送由 GloveController.sendCommand 完成）。
+ * 注意：自协议重构后，**指令字节的组装全部移到 `protocol/commands.ts`**（HDLC 帧 + 命令码），
+ * 本文件不再包含任何旧版 4 字节指令（F9/FA/FB）的构建逻辑，只保留：
+ * - 十六进制格式化 / 乐谱输入解析等纯函数；
+ * - 参数范围常量（BPM / 拍号 / 强度 / 小节 / SRAM 容量 / EEPROM 分区）。
  */
 
-/** 播放控制指令。 */
-export const PLAYBACK_COMMANDS = {
-  /** 停止播放。 */
-  stop: [0xf9, 0x00, 0x00, 0x00],
-  /** 暂停播放。 */
-  pause: [0xf9, 0x01, 0x00, 0x00],
-  /** 继续播放。 */
-  resume: [0xf9, 0x02, 0x00, 0x00],
-  /** 系统复位。 */
-  reset: [0xf9, 0x03, 0x00, 0x00],
-  /** 播放 SRAM 中的乐谱。 */
-  sramPlay: [0xf9, 0x04, 0x00, 0x00],
-};
-
-/** 模式设置指令。 */
-export const MODE_COMMANDS = {
-  /** 切换为单手模式。 */
-  singleHand: [0xf9, 0x20, 0x00, 0x00],
-  /** 切换为双手模式。 */
-  dualHand: [0xf9, 0x20, 0x01, 0x00],
-};
-
-/** 目标设备指令（单手模式专用）。 */
-export const TARGET_COMMANDS = {
-  /** 乐谱目标设为左手（主机）。 */
-  left: [0xf9, 0x24, 0x00, 0x00],
-  /** 乐谱目标设为右手（从机）。 */
-  right: [0xf9, 0x24, 0x01, 0x00],
-};
-
-/** EEPROM 可选分区范围（0~7）。 */
-export const EEPROM_PARTITION_MIN = 0;
-export const EEPROM_PARTITION_MAX = 7;
+/* ===================== 十六进制工具 ===================== */
 
 /**
- * 组装 EEPROM 播放指令：F9 05 [分区] 00。
- * partition 会被限制到 0~7 范围内，防止越界字节。
- */
-export function eepromPlayCommand(partition: number): number[] {
-  const clamped = Math.max(
-    EEPROM_PARTITION_MIN,
-    Math.min(EEPROM_PARTITION_MAX, Math.trunc(partition))
-  );
-  return [0xf9, 0x05, clamped, 0x00];
-}
-
-/**
- * 将字节数组转为 "F9 04 00 00" 形式的字符串（日志显示用）。
+ * 将字节数组转为 "7E 03 01 10 00 8A 2B" 形式的字符串（日志显示用）。
  * 每个字节大写、两位十六进制、空格分隔。
  */
-export function toHexString(bytes: number[]): string {
-  return bytes
+export function toHexString(bytes: Uint8Array | number[]): string {
+  const arr = Array.from(bytes);
+  return arr
     .map((b) => b.toString(16).toUpperCase().padStart(2, '0'))
     .join(' ');
 }
 
-/* ===================== 乐谱写入相关 ===================== */
-
-/** 乐谱写入: 同步头字节。 */
-export const SCORE_SYNC = 0xfb;
-/** 乐谱写入: SRAM 最大指令条数（超过会被硬件丢弃）。 */
-export const MAX_SRAM_COMMANDS = 32;
-
-/** 清空 SRAM 乐谱: F9 10 00 00。 */
-export const SRAM_CLEAR_COMMAND = [0xf9, 0x10, 0x00, 0x00];
-
-/**
- * 清除 EEPROM 指定分区: F9 12 [分区] 00。
- * partition 会被限制到 0~7。
- */
-export function eepromClearCommand(partition: number): number[] {
-  const clamped = clampPartition(partition);
-  return [0xf9, 0x12, clamped, 0x00];
-}
-
-/**
- * 进入 EEPROM 指定分区写入模式: F9 11 [分区] 00。
- * partition 会被限制到 0~7。
- */
-export function eepromWriteInitCommand(partition: number): number[] {
-  const clamped = clampPartition(partition);
-  return [0xf9, 0x11, clamped, 0x00];
-}
-
-/**
- * 构建乐谱数据指令: FB [tick] [motor] [XOR]。
- * XOR = 0xFB ^ tick ^ motorCtrl。
- */
-export function buildScoreCommand(tick: number, motorCtrl: number): number[] {
-  return [SCORE_SYNC, tick, motorCtrl, SCORE_SYNC ^ tick ^ motorCtrl];
-}
-
-/** 乐谱写入结束标志: FB FF 00 04（校验固定 0x04, 不是 0xFB）。 */
-export const SCORE_END_MARKER = [SCORE_SYNC, 0xff, 0x00, 0x04];
+/* ===================== 乐谱输入解析 ===================== */
 
 /** 乐谱输入解析结果。ok=false 时 reason 表示错误类型。 */
 export type ScoreParseResult =
@@ -133,24 +54,20 @@ export function parseScoreInput(input: string): ScoreParseResult {
   return { ok: true, pairs };
 }
 
-/** 将分区号限制到 0~7。 */
-function clampPartition(partition: number): number {
-  return Math.max(EEPROM_PARTITION_MIN, Math.min(EEPROM_PARTITION_MAX, Math.trunc(partition)));
-}
+/* ===================== 存储容量常量 ===================== */
 
-/* ===================== BPM / 拍号设置 ===================== */
+/** 乐谱: SRAM 最大指令条数（超过会被硬件丢弃）。 */
+export const MAX_SRAM_COMMANDS = 32;
+
+/** EEPROM 可选分区范围（0~7）。 */
+export const EEPROM_PARTITION_MIN = 0;
+export const EEPROM_PARTITION_MAX = 7;
+
+/* ===================== 参数范围常量 ===================== */
 
 /** BPM 设置范围。 */
 export const BPM_MIN = 1;
 export const BPM_MAX = 300;
-
-/**
- * 构建 BPM 设置指令: FA [高8位] [低8位] 00。
- * 例: BPM=120 → 0x0078 → FA 00 78 00; BPM=300 → 0x012C → FA 01 2C 00。
- */
-export function buildBpmCommand(bpm: number): number[] {
-  return [0xfa, (bpm >> 8) & 0xff, bpm & 0xff, 0x00];
-}
 
 /** 拍号预设选项（label 用于 UI 显示，beats 为每小节拍数，分母不参与编码）。 */
 export const TIME_SIGNATURE_OPTIONS = [
@@ -160,17 +77,6 @@ export const TIME_SIGNATURE_OPTIONS = [
   { label: '6/8', beats: 6 },
 ] as const;
 
-/**
- * 构建拍号设置指令: F9 21 [beats<<4] 00。
- * 固件 case 0x21 只取高4位作为每小节拍数（beatsPerBar），低4位被忽略，固定填 0。
- * 例: 4/4 → 4 拍 → F9 21 40 00; 6/8 → 6 拍 → F9 21 60 00。
- */
-export function buildTimeSignatureCommand(beats: number): number[] {
-  return [0xf9, 0x21, (beats << 4) & 0xff, 0x00];
-}
-
-/* ===================== 马达强度设置 ===================== */
-
 /** 马达强度设置范围（0~255，UI 限制 1~255）。 */
 export const INTENSITY_MIN = 1;
 export const INTENSITY_MAX = 255;
@@ -178,42 +84,9 @@ export const INTENSITY_MAX = 255;
 export const INTENSITY_FINGER_MIN = 1;
 export const INTENSITY_FINGER_MAX = 5;
 
-/**
- * 构建马达强度设置指令: F9 25 [引脚索引] [强度]。
- *
- * 注意：指令固定 4 字节且**无 XOR 校验**（只有乐谱 0xFB 指令有校验），
- * 强度值直接放在第 4 字节，不要额外追加一个 00（AI 常在数据后多加一字节）。
- * 例: 手指1 强度200 → F9 25 00 C8。
- *
- * finger 为用户视角的手指编号 1~5，内部转换为固件引脚索引 0~4。
- * 目标设备（左手本地 / 右手转发）由调用方先发 F9 24 00/01 决定，
- * 本函数只组装强度指令本身。
- */
-export function buildIntensityCommand(finger: number, intensity: number): number[] {
-  const fingerClamped = Math.max(
-    INTENSITY_FINGER_MIN,
-    Math.min(INTENSITY_FINGER_MAX, Math.trunc(finger))
-  );
-  const intensityClamped = Math.max(
-    INTENSITY_MIN,
-    Math.min(INTENSITY_MAX, Math.trunc(intensity))
-  );
-  return [0xf9, 0x25, fingerClamped - INTENSITY_FINGER_MIN, intensityClamped];
-}
-
-/* ===================== 小节跳转 ===================== */
-
-/** 小节跳转范围（1 基。固件 SRAM 上限 32、EEPROM 上限 128，超出由固件拒绝，UI 放 1~255）。 */
+/** 小节跳转范围（1 基）。 */
 export const JUMP_BAR_MIN = 1;
 export const JUMP_BAR_MAX = 255;
 
-/**
- * 构建小节跳转指令: F9 26 [小节号1基] 00。
- *
- * 固定 4 字节、无 XOR。跳到指定小节第一条指令，并从该小节 tick=0 重新播放。
- * 目标设备（左手本地 / 右手转发）由调用方先发 F9 24 00/01 决定，本函数只组装指令。
- */
-export function buildJumpBarCommand(bar: number): number[] {
-  const barClamped = Math.max(JUMP_BAR_MIN, Math.min(JUMP_BAR_MAX, Math.trunc(bar)));
-  return [0xf9, 0x26, barClamped, 0x00];
-}
+/** 批量写入块大小（数据字节数/块，≤20）。 */
+export const WRITE_BLOCK_SIZE = 20;

@@ -1,18 +1,27 @@
-import { GLOVE_SERVICE_UUID, GLOVE_WRITE_UUID } from './glove-constants';
+import { GLOVE_SERVICE_UUID, GLOVE_WRITE_UUID, GLOVE_NOTIFY_UUID } from './glove-constants';
+import { GloveLink, GloveLinkCallbacks, WriteSessionResult } from './protocol/GloveLink';
+import { DecodedFrame } from './protocol/frame';
+import {
+  CMD_ACK,
+  CMD_HELLO,
+  CMD_HELLO_ACK,
+  DST_PC,
+  ERR_OK,
+  PROTOCOL_VERSION,
+} from './protocol/commands';
 
 /**
- * Bluetooth接続成功時の結果。deviceNameとWrite用キャラクタリスティックを返す。
+ * Bluetooth接続成功時の結果。deviceNameとWrite/Notify用キャラクタリスティックを返す。
  * キャラクタリスティックはglove-sliceへ保存し、切断時の再利用・指令送信に使う。
  */
 export interface GloveConnection {
   deviceName: string;
   characteristic: BluetoothRemoteGATTCharacteristic;
+  notifyCharacteristic: BluetoothRemoteGATTCharacteristic;
 }
 
 /**
  * デバイス選択（requestDevice）がタイムアウトしたことを示すエラー。
- * 主プロセスの select-bluetooth-device ハンドラが Piano_L デバイスを見つけられない
- * まま時間が経過した場合に投げる。UI側で専用メッセージへ振り分けるために使う。
  */
 export class GloveScanTimeoutError extends Error {
   constructor() {
@@ -21,63 +30,66 @@ export class GloveScanTimeoutError extends Error {
   }
 }
 
-/** requestDevice の待機上限（ms）。ユーザーがデバイスを選ぶ時間を含むため余裕を持たせる。 */
+/** requestDevice の待機上限（ms）。 */
 const GLOVE_SCAN_TIMEOUT_MS = 60000;
 
-/**
- * 每条指令发送间隔（ms）。
- * 9600 baud 下单条指令传输约 4ms，5ms 足够让 BLE 缓冲区排空。
- * 870 条指令写入时间从 43 秒降到约 4.35 秒。
- */
-const SEND_INTERVAL_MS = 5;
+/** 指令发送结果（不抛出，UI 友好）。 */
+export interface GloveSendResult {
+  ok: boolean;
+  /** ACK 携带的状态码（仅 ACK）。 */
+  status?: number;
+  /** NAK 携带的错误码。 */
+  errorCode?: number;
+  /** 收到响应帧（如有）。 */
+  frame?: DecodedFrame;
+  /** 发送帧的转义字节流（日志可追溯用）。 */
+  encoded?: Uint8Array;
+  /** 失败原因描述（超时/异常/NAK）。 */
+  error?: string;
+}
+
+/** 乐谱写入结果。 */
+export interface GloveWriteResult {
+  ok: boolean;
+  result?: WriteSessionResult;
+  error?: string;
+}
 
 /**
  * 振動手套（左手套・マスター）のBluetooth接続をカプセル化する。
  *
- * 通信トポロジーの制約上、PCは左手套のみと接続する（右手套は左手套経由で制御）。
- * 本クラスは接続（requestDevice → GATT接続 → Write特性取得）と切断のみを担い、
- * 接続状態・ログの管理はglove-slice側で行う（関心の分離）。
- *
- * 注意: Web Bluetooth APIは開発環境（localhost）でのみ利用可能。
- * 本番（file://プロトコル）では無効化されるため、別途noble等での置換が必要。
+ * 重构后（新协议）：
+ * - 连接时同时取得 Write（App→设备）与 Notify（设备→App）特征；
+ * - 协议层逻辑（帧编解码、ACK 等待与重传、批量写入会话、心跳）全部收敛到 GloveLink，
+ *   本类只负责 BLE 连接生命周期与高层 API 封装，与 UI 解耦。
  */
 export class GloveController {
-  /** 上次指令发送的时间戳，用于间隔控制。 */
-  private lastSendTime = 0;
-  /** 发送链：串行化所有指令，确保间隔控制不被并发调用破坏。 */
-  private sendChain: Promise<void> = Promise.resolve();
-  /** 诊断：首次发送时打印使用的写入方式（只打印一次）。 */
-  private writeMethodLogged = false;
+  private link: GloveLink;
+  private linkCallbacks: GloveLinkCallbacks = {};
+  private deviceName: string | null = null;
+  private writeChar: BluetoothRemoteGATTCharacteristic | null = null;
+  private notifyChar: BluetoothRemoteGATTCharacteristic | null = null;
 
-  /**
-   * Bluetooth接続フローを実行する。
-   *
-   * 1. navigator.bluetooth.requestDevice() を acceptAllDevices で呼び出す
-   *    （名前フィルタ無し。主プロセスが発見デバイス一覧をrendererへ転送し、
-   *     ユーザーがGloveControlPanelの一覧から選択する。任意サービス: 主サービスUUID）
-   * 2. 選択されたデバイスのGATTサーバへ接続
-   * 3. 主サービス（0000fff0-...）を取得
-   * 4. Writeキャラクタリスティック（0000fff2-...）を取得
-   *
-   * requestDevice はユーザーがデバイスを選択するまで解決しない。無限待機を避けるため
-   * タイムアウトと競わせる。ユーザーがキャンセルした場合、主プロセスが空文字を
-   * callbackへ渡し、requestDeviceはNotFoundErrorでrejectされる（呼び出し側でtry-catch）。
-   *
-   * @throws Web Bluetooth APIが利用不可、選択デバイスが手套でない（GATTサービス無し）、
-   *         または接続の各段階で失敗した場合
-   */
+  constructor() {
+    this.link = new GloveLink(this.linkCallbacks);
+  }
+
+  /** 设置设备→App 事件回调（如从机断链通知、校时完成）。 */
+  setEventCallback(cb: GloveLinkCallbacks['onEvent']): void {
+    this.linkCallbacks.onEvent = cb;
+    // 若已连接，重建链路层会丢失 attach；改为仅更新回调引用（link 持有同一对象引用）
+    // GloveLink 内部回调对象与 linkCallbacks 共享引用，直接赋值即可生效。
+  }
+
   async connect(): Promise<GloveConnection> {
     if (!navigator.bluetooth) {
       throw new Error('Web Bluetooth API is unavailable in this environment.');
     }
-    // 重置诊断标志，新连接时重新打印写入方式
-    this.writeMethodLogged = false;
 
-    // requestDevice はユーザーがデバイスを選択するまで解決しない。無限待機を避けるため
-    // タイムアウトと競わせる。タイムアウト勝利時も requestPromise は裏で保留されたままに
-    // なるため、後から reject された場合の未処理拒否を抑制する no-op catch を付ける。
     const requestPromise = navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
+      // 按广播名前缀过滤，只匹配手套设备（Glove_L / Glove_R），
+      // 避免无关设备占据扫描窗口；无名称设备直接不显示。
+      filters: [{ namePrefix: 'Glove' }],
       optionalServices: [GLOVE_SERVICE_UUID],
     });
     requestPromise.catch(() => {});
@@ -95,58 +107,116 @@ export class GloveController {
 
     const server = await device.gatt.connect();
     const service = await server.getPrimaryService(GLOVE_SERVICE_UUID);
-    const characteristic = await service.getCharacteristic(GLOVE_WRITE_UUID);
+    const writeChar = await service.getCharacteristic(GLOVE_WRITE_UUID);
+    // 尝试获取 Notify 特征（设备→App 响应/事件通道）。部分模块可能未启用，容错。
+    let notifyChar: BluetoothRemoteGATTCharacteristic | null = null;
+    try {
+      notifyChar = await service.getCharacteristic(GLOVE_NOTIFY_UUID);
+    } catch (err) {
+      console.warn('[GloveController] Notify characteristic not found:', err);
+    }
+    if (!notifyChar) {
+      throw new Error('Notify characteristic is unavailable; new protocol requires it.');
+    }
+
+    this.deviceName = device.name ?? 'Unknown device';
+    this.writeChar = writeChar;
+    this.notifyChar = notifyChar;
+    this.link.attach(writeChar, notifyChar);
+
+    // 连接握手：HELLO（协议版本协商）
+    await this.sendCommand(DST_PC, CMD_HELLO, new Uint8Array([PROTOCOL_VERSION, 0x00]), [CMD_HELLO_ACK], {
+      ackTimeoutMs: 1000,
+      maxRetries: 2,
+    });
 
     return {
-      deviceName: device.name ?? 'Unknown device',
-      characteristic,
+      deviceName: this.deviceName,
+      characteristic: writeChar,
+      notifyCharacteristic: notifyChar,
     };
   }
 
   /**
-   * 通过已连接的 characteristic 发送 4 字节指令。
-   *
-   * 串行化所有发送（链式 Promise）并保证两次发送间至少间隔 SEND_INTERVAL_MS，
-   * 避免 BLE 队列溢出。优先使用 writeValueWithoutResponse（无需等设备 ACK），
-   * 不支持时回退到 writeValue（write with response）。
-   *
-   * 单次失败不会打断后续指令的发送（链上每次调用独立 reject/resolve）。
-   *
-   * @throws writeValue 失败时抛出
+   * 发送一条命令并等待 ACK/NAK（超时重发，最多 3 次）。
+   * @param dst 目的节点（DST_PC / DST_SLAVE）
+   * @param cmd 命令码
+   * @param payload 载荷
+   * @param acceptCmds 有效成功响应命令集合
+   * @param opts 超时/重试覆盖
+   * @returns 结果对象；ok=false 时不抛出，error 描述原因。
    */
-  sendCommand(characteristic: BluetoothRemoteGATTCharacteristic, data: Uint8Array): Promise<void> {
-    const run = async (): Promise<void> => {
-      const elapsed = Date.now() - this.lastSendTime;
-      if (elapsed < SEND_INTERVAL_MS) {
-        await new Promise((resolve) => setTimeout(resolve, SEND_INTERVAL_MS - elapsed));
+  async sendCommand(
+    dst: number,
+    cmd: number,
+    payload: Uint8Array = new Uint8Array(0),
+    acceptCmds: number[] = [CMD_ACK],
+    opts?: { ackTimeoutMs?: number; maxRetries?: number }
+  ): Promise<GloveSendResult> {
+    try {
+      const { frame, encoded } = await this.link.sendCommand(dst, cmd, payload, acceptCmds, opts);
+      if (frame.cmd === 0x83 /* NAK */) {
+        return {
+          ok: false,
+          errorCode: frame.payload[0] ?? -1,
+          error: `NAK err=${frame.payload[0] ?? -1}`,
+          frame,
+          encoded,
+        };
       }
-      // 优先无响应写入：不等 ACK，一个连接间隔即可完成（约 30ms→5ms）
-      // 回退带响应写入：每条需等 ACK（约 120ms），慢但兼容性好
-      if (characteristic.properties.writeWithoutResponse) {
-        if (!this.writeMethodLogged) {
-          console.log('[GloveController] 使用 writeValueWithoutResponse（无响应写入）');
-          this.writeMethodLogged = true;
-        }
-        await characteristic.writeValueWithoutResponse(data);
-      } else {
-        if (!this.writeMethodLogged) {
-          console.log('[GloveController] 使用 writeValue（带响应写入，较慢）');
-          this.writeMethodLogged = true;
-        }
-        await characteristic.writeValue(data);
-      }
-      this.lastSendTime = Date.now();
-    };
-    // 前一个发送完成（无论成功失败）后再执行本次，保证串行 + 间隔控制。
-    this.sendChain = this.sendChain.catch(() => {}).then(run);
-    return this.sendChain;
+      return { ok: true, status: frame.payload[0] ?? ERR_OK, frame, encoded };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
   }
 
-  /**
-   * GATT接続を切断する。キャラクタリスティックからデバイスを逆参照して
-   * gatt.disconnect()を呼ぶ。未接続・characteristicがnullの場合は何もしない。
-   */
+  /** 直接发送原始编码帧（保留兼容入口；一般使用 sendCommand）。 */
+  async sendRaw(
+    encoded: Uint8Array,
+    acceptCmds: number[] = [CMD_ACK],
+    opts?: { ackTimeoutMs?: number; maxRetries?: number }
+  ): Promise<GloveSendResult> {
+    try {
+      const frame = await this.link.request(encoded, acceptCmds, opts);
+      if (frame.cmd === 0x83) {
+        return { ok: false, errorCode: frame.payload[0] ?? -1, error: `NAK err=${frame.payload[0] ?? -1}`, frame, encoded };
+      }
+      return { ok: true, status: frame.payload[0] ?? ERR_OK, frame, encoded };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  }
+
+  /** 批量写入乐谱会话（走协议层 WRITE_BEGIN/DATA/END）。 */
+  async writeScore(opts: {
+    dst: number;
+    target: number;
+    storage: number;
+    partition: number;
+    data: Uint8Array;
+    batchCrc: number;
+    blockSize?: number;
+    onProgress?: (writtenBytes: number, totalBytes: number) => void;
+    shouldAbort?: () => boolean;
+  }): Promise<GloveWriteResult> {
+    try {
+      const result = await this.link.writeScoreSession(opts);
+      return { ok: result.status === ERR_OK && result.crcOk, result };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  }
+
+  /** 应用层命令便捷方法：DST 默认发往主机。 */
+  get isConnected(): boolean {
+    return this.link.isConnected;
+  }
+
   disconnect(characteristic: BluetoothRemoteGATTCharacteristic | null): void {
+    this.link.detach();
     if (!characteristic) return;
     const gatt = characteristic.service?.device?.gatt;
     if (gatt?.connected) {
@@ -157,3 +227,6 @@ export class GloveController {
 
 /** アプリ全体で共有するシングルトンインスタンス。 */
 export const gloveController = new GloveController();
+
+// 保留 DST_PC 导出避免破坏引用（UI 层）
+export { DST_PC };

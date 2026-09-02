@@ -3,34 +3,49 @@ import { usePracticeStore } from '../../store';
 import { gloveController, GloveScanTimeoutError } from '../../lib/bluetooth/GloveController';
 import { convertScoreToGloveCommands } from '../../lib/glove/ScoreConverter';
 import {
-  PLAYBACK_COMMANDS,
-  MODE_COMMANDS,
-  TARGET_COMMANDS,
-  eepromPlayCommand,
   toHexString,
   EEPROM_PARTITION_MIN,
   EEPROM_PARTITION_MAX,
-  SRAM_CLEAR_COMMAND,
-  SCORE_END_MARKER,
   MAX_SRAM_COMMANDS,
-  buildScoreCommand,
-  eepromClearCommand,
-  eepromWriteInitCommand,
   parseScoreInput,
-  buildBpmCommand,
-  buildTimeSignatureCommand,
   TIME_SIGNATURE_OPTIONS,
   BPM_MIN,
   BPM_MAX,
-  buildIntensityCommand,
   INTENSITY_MIN,
   INTENSITY_MAX,
   INTENSITY_FINGER_MIN,
   INTENSITY_FINGER_MAX,
-  buildJumpBarCommand,
   JUMP_BAR_MIN,
   JUMP_BAR_MAX,
+  WRITE_BLOCK_SIZE,
 } from '../../lib/bluetooth/glove-commands';
+import {
+  DST_PC,
+  DST_SLAVE,
+  TARGET_LOCAL,
+  TARGET_SLAVE,
+  STORAGE_SRAM,
+  STORAGE_EEPROM,
+  CMD_STOP,
+  CMD_PAUSE,
+  CMD_RESUME,
+  CMD_RESET,
+  CMD_SRAM_PLAY,
+  CMD_EEPROM_PLAY,
+  CMD_CLEAR_SRAM,
+  CMD_CLEAR_EEPROM,
+  CMD_JUMP_BAR,
+  CMD_SET_MODE,
+  CMD_SET_BPM,
+  CMD_SET_TIME_SIG,
+  CMD_SET_INTENSITY,
+  EVT_SLAVE_LINK_LOST,
+  EVT_SLAVE_LINK_RESTORED,
+  EVT_SYNC_COMPLETE,
+  dstForTarget,
+  targetBitForTarget,
+} from '../../lib/bluetooth/protocol/commands';
+import { crc16 } from '../../lib/bluetooth/protocol/frame';
 import { useTranslation } from '../../lib/i18n/useTranslation';
 import { formatMessage } from '../../lib/i18n/format';
 import type { BluetoothDeviceInfo } from '../../types/electron-api';
@@ -178,6 +193,9 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
   const setGloveConnected = usePracticeStore((s) => s.setGloveConnected);
   const setGloveDisconnected = usePracticeStore((s) => s.setGloveDisconnected);
   const addGloveLog = usePracticeStore((s) => s.addGloveLog);
+  const slaveLinkAlive = usePracticeStore((s) => s.slaveLinkAlive);
+  const setSlaveLinkAlive = usePracticeStore((s) => s.setSlaveLinkAlive);
+  const setSyncInfo = usePracticeStore((s) => s.setSyncInfo);
   const score = usePracticeStore((s) => s.score);
 
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -301,7 +319,25 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
 
     try {
       const result = await gloveController.connect();
-      setGloveConnected(result.deviceName, result.characteristic);
+      setGloveConnected(result.deviceName, result.characteristic, result.notifyCharacteristic);
+      // 设备→App 事件：从机断链/恢复、校时完成
+      gloveController.setEventCallback((eventCode, data) => {
+        const ts = () => formatTimestamp(new Date());
+        if (eventCode === EVT_SLAVE_LINK_LOST) {
+          setSlaveLinkAlive(false);
+          addGloveLog(`[${ts()}] ${t.glove.slaveLinkLost}`);
+        } else if (eventCode === EVT_SLAVE_LINK_RESTORED) {
+          setSlaveLinkAlive(true);
+          addGloveLog(`[${ts()}] ${t.glove.slaveLinkRestored}`);
+        } else if (eventCode === EVT_SYNC_COMPLETE && data.length >= 6) {
+          const bestRtt = (data[0] | (data[1] << 8)) & 0xffff;
+          const offset = (data[2] | (data[3] << 8) | (data[4] << 16) | (data[5] << 24)) | 0;
+          setSyncInfo({ synced: true, bestRttUs: bestRtt, offsetUs: offset, at: Date.now() });
+          addGloveLog(
+            `[${ts()}] ${formatMessage(t.glove.syncComplete, { rtt: bestRtt, offset })}`
+          );
+        }
+      });
       addGloveLog(
         `[${formatTimestamp(new Date())}] ${formatMessage(t.glove.logConnected, { device: result.deviceName })}`
       );
@@ -357,27 +393,34 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     }
   };
 
-  // 通用指令发送：检查连接 → writeValue → 记录日志。返回是否发送成功。
-  // 未连接时记录"请先连接手套"；发送中短暂禁用按钮（视觉反馈）。
-  const sendCommand = async (bytes: number[], description: string): Promise<boolean> => {
-    if (!characteristic) {
+  // 通用指令发送：检查连接 → 新协议命令帧（DST+CMD+payload）→ 等待 ACK/NAK → 记录日志。
+  // 返回是否收到 ACK（ok=true）。NAK/超时结果写日志可追溯。
+  const sendCommand = async (
+    cmd: number,
+    payload: Uint8Array,
+    description: string,
+    opts?: { dst?: number; acceptCmds?: number[]; ackTimeoutMs?: number; maxRetries?: number }
+  ): Promise<boolean> => {
+    if (!isConnected) {
       addGloveLog(`[${formatTimestamp(new Date())}] ${t.glove.logNotConnected}`);
       return false;
     }
     setSending(true);
     try {
-      await gloveController.sendCommand(characteristic, new Uint8Array(bytes));
+      const dst = opts?.dst ?? DST_PC;
+      const res = await gloveController.sendCommand(dst, cmd, payload, opts?.acceptCmds, {
+        ackTimeoutMs: opts?.ackTimeoutMs,
+        maxRetries: opts?.maxRetries,
+      });
+      const hex = res.encoded ? toHexString(res.encoded) : '';
+      if (res.ok) {
+        addGloveLog(
+          `[${formatTimestamp(new Date())}] ${formatMessage(t.glove.logSent, { cmd: hex, desc: description })} → ACK`
+        );
+        return true;
+      }
       addGloveLog(
-        `[${formatTimestamp(new Date())}] ${formatMessage(t.glove.logSent, {
-          cmd: toHexString(bytes),
-          desc: description,
-        })}`
-      );
-      return true;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      addGloveLog(
-        `[${formatTimestamp(new Date())}] ${formatMessage(t.glove.logSendError, { error: msg })}`
+        `[${formatTimestamp(new Date())}] ⚠️ ${formatMessage(t.glove.logSendError, { error: res.error ?? 'NAK' })} → ${hex} (${description})`
       );
       return false;
     } finally {
@@ -385,50 +428,61 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     }
   };
 
-  // 播放控制
-  const handleSramPlay = (): Promise<void> =>
-    sendCommand(PLAYBACK_COMMANDS.sramPlay, t.glove.sramPlay).then(() => undefined);
-  const handleEepromPlay = (): Promise<void> =>
-    sendCommand(eepromPlayCommand(partition), t.glove.eepromPlay).then(() => undefined);
-  const handleStop = (): Promise<void> =>
-    sendCommand(PLAYBACK_COMMANDS.stop, t.glove.stop).then(() => undefined);
-  const handlePause = (): Promise<void> =>
-    sendCommand(PLAYBACK_COMMANDS.pause, t.glove.pause).then(() => undefined);
-  const handleResume = (): Promise<void> =>
-    sendCommand(PLAYBACK_COMMANDS.resume, t.glove.resume).then(() => undefined);
-  const handleReset = (): Promise<void> =>
-    sendCommand(PLAYBACK_COMMANDS.reset, t.glove.reset).then(() => undefined);
+  // 目标设备 bit：与 UI target 联动（目标已编码进命令帧，无需单独发目标指令）
+  const tbit = (): number => (target === 'left' ? TARGET_LOCAL : TARGET_SLAVE);
 
-  // 模式切换：发送成功后才更新 UI（保证 UI 与硬件状态一致）
+  // 播放控制（DST 始终发主机，固件按模式/目标决定本地+转发或仅转发）。
+  // 控制命令用长 ACK 窗口：实测总线/透传模块在写会话、校时后存在数百 ms 拥塞，
+  // ACK 会迟到但最终能到（默认 300ms×4 窗口过窄导致误报超时）。
+  const CTRL_ACK_OPTS = { ackTimeoutMs: 1500, maxRetries: 3 };
+  const handleSramPlay = (): Promise<void> =>
+    sendCommand(CMD_SRAM_PLAY, new Uint8Array([tbit()]), t.glove.sramPlay, CTRL_ACK_OPTS).then(
+      () => undefined
+    );
+  const handleEepromPlay = (): Promise<void> =>
+    sendCommand(CMD_EEPROM_PLAY, new Uint8Array([tbit(), partition]), t.glove.eepromPlay, CTRL_ACK_OPTS).then(
+      () => undefined
+    );
+  const handleStop = (): Promise<void> =>
+    sendCommand(CMD_STOP, new Uint8Array([tbit()]), t.glove.stop, CTRL_ACK_OPTS).then(() => undefined);
+  const handlePause = (): Promise<void> =>
+    sendCommand(CMD_PAUSE, new Uint8Array([tbit()]), t.glove.pause, CTRL_ACK_OPTS).then(
+      () => undefined
+    );
+  const handleResume = (): Promise<void> =>
+    sendCommand(CMD_RESUME, new Uint8Array([tbit()]), t.glove.resume, CTRL_ACK_OPTS).then(
+      () => undefined
+    );
+  const handleReset = (): Promise<void> =>
+    sendCommand(CMD_RESET, new Uint8Array([tbit()]), t.glove.reset, CTRL_ACK_OPTS).then(
+      () => undefined
+    );
+
+  // 模式切换：发送成功后才更新 UI（mode 全局，目标位固定本地）
   const handleSingleHand = (): Promise<void> =>
-    sendCommand(MODE_COMMANDS.singleHand, t.glove.singleHand).then((ok) => {
+    sendCommand(CMD_SET_MODE, new Uint8Array([TARGET_LOCAL, 0]), t.glove.singleHand).then((ok) => {
       if (ok) setMode('single');
     });
   const handleDualHand = (): Promise<void> =>
-    sendCommand(MODE_COMMANDS.dualHand, t.glove.dualHand).then((ok) => {
+    sendCommand(CMD_SET_MODE, new Uint8Array([TARGET_LOCAL, 1]), t.glove.dualHand).then((ok) => {
       if (ok) setMode('dual');
     });
 
-  // 目标设备切换
-  const handleTargetLeft = (): Promise<void> =>
-    sendCommand(TARGET_COMMANDS.left, t.glove.targetLeft).then((ok) => {
-      if (ok) setTarget('left');
-    });
-  const handleTargetRight = (): Promise<void> =>
-    sendCommand(TARGET_COMMANDS.right, t.glove.targetRight).then((ok) => {
-      if (ok) setTarget('right');
-    });
+  // 目标设备切换：目标已编码进命令帧/DST，无需发送目标指令，仅更新 UI 状态。
+  const handleTargetLeft = (): Promise<void> => Promise.resolve().then(() => setTarget('left'));
+  const handleTargetRight = (): Promise<void> => Promise.resolve().then(() => setTarget('right'));
 
   // 乐谱输入实时预览：解析当前文本域内容，统计指令条数。
   const scorePreview = parseScoreInput(scoreInput);
   const scoreCommandCount = scorePreview.ok ? scorePreview.pairs.length : 0;
 
-  // 乐谱写入完整流程：检查连接 → 解析 → 设置目标 → 初始化存储 → 逐条发送 → 结束标志。
-  // 任意一步失败则中止并记录错误。全程 isWriting=true 禁用所有控制按钮。
+  // 乐谱写入完整流程：检查连接 → 解析 → 批量会话 WRITE_BEGIN/DATA/END（协议层）。
+  // 目标（左/右手）决定 DST 与目标位；SRAM/EEPROM 决定存储介质。
+  // 进度按"块"上报；最终结果包含实际写入字节数（可与预期比对验证无丢包）。
   const handleWriteScore = async (): Promise<void> => {
     const ts = () => formatTimestamp(new Date());
 
-    if (!characteristic) {
+    if (!isConnected) {
       setWriteStatus(t.glove.logNotConnected);
       addGloveLog(`[${ts()}] ${t.glove.logNotConnected}`);
       return;
@@ -466,93 +520,69 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
       `[${ts()}] ${formatMessage(t.glove.logWriteStart, { target: targetLabel, storage: storageLabel })}`
     );
 
-    let sentCount = 0;
-    let cancelled = false;
+    // 组装乐谱数据字节（tick, motor 交替）
+    const data = new Uint8Array(parsed.pairs.length * 2);
+    parsed.pairs.forEach(([tick, motor], i) => {
+      data[i * 2] = tick;
+      data[i * 2 + 1] = motor;
+    });
+    const batchCrc = crc16(data);
+    const dst = target === 'left' ? DST_PC : DST_SLAVE;
+    const tgt = target === 'left' ? TARGET_LOCAL : TARGET_SLAVE;
+    const storage = writeStorage === 'sram' ? STORAGE_SRAM : STORAGE_EEPROM;
+
     try {
-      // 步骤3: 设置目标设备（必发，确保乐谱写入正确的目标）
-      const targetCmd = target === 'left' ? TARGET_COMMANDS.left : TARGET_COMMANDS.right;
-      await gloveController.sendCommand(characteristic, new Uint8Array(targetCmd));
-      sentCount++;
-      addGloveLog(
-        `[${ts()}] → ${toHexString(targetCmd)} (${target === 'left' ? t.glove.logWriteTargetLeft : t.glove.logWriteTargetRight})`
-      );
+      const res = await gloveController.writeScore({
+        dst,
+        target: tgt,
+        storage,
+        partition: writePartition,
+        data,
+        batchCrc,
+        blockSize: WRITE_BLOCK_SIZE,
+        shouldAbort: () => shouldCancelRef.current,
+        onProgress: (written, total) => {
+          setWriteProgress({ current: written, total });
+          setWriteStatus(formatMessage(t.glove.writingProgress, { current: written, total }));
+        },
+      });
 
-      // 步骤4: 初始化目标存储区域
-      if (writeStorage === 'sram') {
-        await gloveController.sendCommand(characteristic, new Uint8Array(SRAM_CLEAR_COMMAND));
-        sentCount++;
-        addGloveLog(`[${ts()}] → ${toHexString(SRAM_CLEAR_COMMAND)} (${t.glove.logWriteClearSram})`);
-      } else {
-        const clearCmd = eepromClearCommand(writePartition);
-        await gloveController.sendCommand(characteristic, new Uint8Array(clearCmd));
-        sentCount++;
-        addGloveLog(
-          `[${ts()}] → ${toHexString(clearCmd)} (${formatMessage(t.glove.logWriteClearEeprom, { partition: writePartition })})`
-        );
-        const initCmd = eepromWriteInitCommand(writePartition);
-        await gloveController.sendCommand(characteristic, new Uint8Array(initCmd));
-        sentCount++;
-        addGloveLog(
-          `[${ts()}] → ${toHexString(initCmd)} (${formatMessage(t.glove.logWriteInitEeprom, { partition: writePartition })})`
-        );
-      }
-
-      // 步骤5: 逐条发送乐谱数据（controller 内部 5ms 节流）
-      const total = parsed.pairs.length;
-      // 诊断日志：打印每条指令的发送时间戳，便于验证实际间隔
-      console.log(`[乐谱写入] 开始发送 ${total} 条指令，startTime=${startTime}`);
-      let prevSendTime = Date.now();
-      for (let i = 0; i < total; i++) {
-        // 检查取消标志
-        if (shouldCancelRef.current) {
-          cancelled = true;
-          console.log(`[乐谱写入] 用户取消，已发送 ${i}/${total} 条`);
-          break;
-        }
-
-        const [tick, motor] = parsed.pairs[i];
-        const cmd = buildScoreCommand(tick, motor);
-        await gloveController.sendCommand(characteristic, new Uint8Array(cmd));
-        sentCount++;
-
-        // 诊断日志：每条指令的发送时间戳和间隔
-        const now = Date.now();
-        const interval = now - prevSendTime;
-        console.log(`[乐谱写入] #${i + 1}/${total} ${toHexString(cmd)} t=${now} interval=${interval}ms`);
-        prevSendTime = now;
-
-        // UI 更新：每 20 条或最后一条更新一次状态（减少 React 重渲染开销）
-        if (i % 20 === 0 || i === total - 1) {
-          setWriteStatus(formatMessage(t.glove.writingProgress, { current: i + 1, total }));
-          setWriteProgress({ current: i + 1, total });
-        }
-      }
-
-      if (!cancelled) {
-        // 步骤6: 发送结束标志 FB FF 00 04
-        await gloveController.sendCommand(characteristic, new Uint8Array(SCORE_END_MARKER));
-        sentCount++;
-        addGloveLog(`[${ts()}] → ${toHexString(SCORE_END_MARKER)} (${t.glove.logWriteEnd})`);
-
-        // 步骤7: 显示完成状态
+      if (res.ok && res.result) {
         const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
-        const completeMsg = formatMessage(t.glove.logWriteComplete, { count: sentCount });
+        const { bytesWritten, crcOk, blocksSent, retries } = res.result;
+        // 新协议长度预声明，预期字节数 = 数据长度（无结束标志）
+        const expectedBytes = data.length;
+        const completeMsg = formatMessage(t.glove.logWriteComplete, { count: blocksSent });
         const timeMsg = formatMessage(t.glove.logWriteTotalTime, { seconds: elapsedSec });
         setWriteStatus(`${completeMsg} (${timeMsg})`);
         addGloveLog(`[${ts()}] ${completeMsg} ${timeMsg}`);
-        console.log(`[乐谱写入] 写入完成，总耗时: ${(Date.now() - startTime) / 1000}s，共 ${sentCount} 条`);
-      } else {
-        // 取消后：清空输入数据，不残留未发送指令
+        addGloveLog(
+          `[${ts()}] ${formatMessage(t.glove.logWriteResult, {
+            bytes: bytesWritten,
+            expected: expectedBytes,
+            crc: crcOk ? 'OK' : 'FAIL',
+            retries,
+          })}`
+        );
+        console.log(
+          `[乐谱写入] 完成 ${blocksSent} 块, 实际字节=${bytesWritten}, 预期=${expectedBytes}, CRC=${crcOk ? 'OK' : 'FAIL'}, 重发=${retries}`
+        );
+        if (!crcOk || bytesWritten !== expectedBytes) {
+          setWriteStatus(t.glove.logWriteErrorCrc);
+        }
+      } else if (shouldCancelRef.current || res.error === 'cancelled') {
         setScoreInput('');
-        const cancelMsg = formatMessage(t.glove.logWriteCancelled, { sent: sentCount, total: parsed.pairs.length });
+        const cancelMsg = formatMessage(t.glove.logWriteCancelled, {
+          sent: 0,
+          total: parsed.pairs.length,
+        });
         setWriteStatus(cancelMsg);
         addGloveLog(`[${ts()}] ${cancelMsg}`);
+      } else {
+        const errMsg = formatMessage(t.glove.logWriteError, { error: res.error ?? 'unknown' });
+        setWriteStatus(errMsg);
+        addGloveLog(`[${ts()}] ${errMsg}`);
       }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      const errMsg = formatMessage(t.glove.logWriteError, { error: msg });
-      setWriteStatus(errMsg);
-      addGloveLog(`[${ts()}] ${errMsg}`);
     } finally {
       setIsWriting(false);
       setWriteProgress(null);
@@ -565,7 +595,7 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     shouldCancelRef.current = true;
   };
 
-  // BPM 设置：校验 1~300 → 发送 FA [高8] [低8] 00 → 成功后更新当前值。
+  // BPM 设置：校验 1~300 → 新协议命令 CMD_SET_BPM → 成功后更新当前值。
   const handleSetBpm = async (): Promise<void> => {
     const bpm = Number(bpmInput);
     if (!Number.isFinite(bpm) || bpm < BPM_MIN || bpm > BPM_MAX) {
@@ -575,17 +605,18 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     }
     setBpmStatus('');
     const desc = formatMessage(t.glove.logSetBpm, { value: bpm });
-    if (await sendCommand(buildBpmCommand(bpm), desc)) {
+    const payload = new Uint8Array([tbit(), bpm & 0xff, (bpm >> 8) & 0xff]);
+    if (await sendCommand(CMD_SET_BPM, payload, desc)) {
       setBpmValue(bpm);
     }
   };
 
-  // 拍号设置：只发送 F9 21 [beats<<4] 00，分母不参与编码。成功后更新当前值。
+  // 拍号设置：CMD_SET_TIME_SIG [target][beats]
   const handleSetTimeSignature = async (): Promise<void> => {
     const option = TIME_SIGNATURE_OPTIONS.find((o) => o.label === timeSignature);
     const beats = option?.beats ?? 4;
     const desc = formatMessage(t.glove.logSetTimeSignature, { value: timeSignature });
-    if (await sendCommand(buildTimeSignatureCommand(beats), desc)) {
+    if (await sendCommand(CMD_SET_TIME_SIG, new Uint8Array([tbit(), beats]), desc)) {
       setTimeSignatureValue(timeSignature);
     }
   };
@@ -602,7 +633,8 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
     return intensity;
   };
 
-  // 组装并发送强度指令 F9 25 [引脚索引] [强度]（固定 4 字节、无 XOR 校验）。
+  // 组装并发送强度指令 CMD_SET_INTENSITY [target][pin(0~4)][value]。
+  // 目标为右手时 DST=DST_SLAVE（由主机转发给从机），左手 DST=DST_PC（本地执行）。
   const sendIntensity = (finger: number, intensity: number): Promise<boolean> => {
     const handLabel = target === 'left' ? t.glove.targetLeft : t.glove.targetRight;
     const desc = formatMessage(t.glove.logSetIntensity, {
@@ -610,38 +642,29 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
       value: intensity,
       hand: handLabel,
     });
-    return sendCommand(buildIntensityCommand(finger, intensity), desc);
+    const dst = target === 'left' ? DST_PC : DST_SLAVE;
+    return sendCommand(CMD_SET_INTENSITY, new Uint8Array([tbit(), finger - 1, intensity]), desc, {
+      dst,
+    });
   };
 
-  // 发送前先发目标指令 F9 24（决定左手本地执行 / 右手由左手转发）。目标与
-  // 模式/写入区共用 target 状态，强度区的左右手按钮即 handleTargetLeft/Right。
-  const ensureIntensityTarget = async (): Promise<boolean> => {
-    const targetCmd = target === 'left' ? TARGET_COMMANDS.left : TARGET_COMMANDS.right;
-    const targetDesc =
-      target === 'left' ? t.glove.logWriteTargetLeft : t.glove.logWriteTargetRight;
-    return sendCommand(targetCmd, targetDesc);
-  };
-
-  // 单指强度：目标 + F9 25。成功即代表硬件已收到（无确认回包）。
+  // 单指强度（目标已编码进命令帧，无需单独发送目标指令）。
   const handleSendIntensity = async (): Promise<void> => {
     const intensity = parseIntensity();
     if (intensity === null) return;
-    if (!(await ensureIntensityTarget())) return;
     await sendIntensity(strengthFinger, intensity);
   };
 
-  // 一键发送：目标 + 五根手指各一条 F9 25，全部设为输入框中的强度。
+  // 一键发送：五根手指各一条强度指令，全部设为输入框中的强度。
   const handleSendAllIntensity = async (): Promise<void> => {
     const intensity = parseIntensity();
     if (intensity === null) return;
-    if (!(await ensureIntensityTarget())) return;
     for (let finger = INTENSITY_FINGER_MIN; finger <= INTENSITY_FINGER_MAX; finger++) {
       if (!(await sendIntensity(finger, intensity))) return;
     }
   };
 
-  // 小节跳转：校验 1~255 → 发送前先设目标 F9 24 → 发 F9 26 [小节号] 00。
-  // 与强度区共用 ensureIntensityTarget（目标设备指令 F9 24 对所有指令通用）。
+  // 小节跳转 CMD_JUMP_BAR [target][bar]。
   const handleJumpBar = async (): Promise<void> => {
     const bar = Number(jumpBarInput);
     if (!Number.isFinite(bar) || bar < JUMP_BAR_MIN || bar > JUMP_BAR_MAX) {
@@ -650,15 +673,14 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
       return;
     }
     setJumpStatus('');
-    if (!(await ensureIntensityTarget())) return;
     const handLabel = target === 'left' ? t.glove.targetLeft : t.glove.targetRight;
     const desc = formatMessage(t.glove.logJumpBar, { value: bar, hand: handLabel });
-    await sendCommand(buildJumpBarCommand(bar), desc);
+    await sendCommand(CMD_JUMP_BAR, new Uint8Array([tbit(), bar]), desc);
   };
 
   // 清除乐谱：先检查连接，再弹窗二次确认，确认后发送清除指令。
   const handleClearRequest = (): void => {
-    if (!characteristic) {
+    if (!isConnected) {
       addGloveLog(`[${formatTimestamp(new Date())}] ${t.glove.logNotConnected}`);
       return;
     }
@@ -667,12 +689,16 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
 
   const handleConfirmClear = async (): Promise<void> => {
     setConfirmingClear(false);
-    const cmd = clearTarget === 'sram' ? SRAM_CLEAR_COMMAND : eepromClearCommand(clearPartition);
+    const cmd = clearTarget === 'sram' ? CMD_CLEAR_SRAM : CMD_CLEAR_EEPROM;
+    const payload =
+      clearTarget === 'sram'
+        ? new Uint8Array([tbit()])
+        : new Uint8Array([tbit(), clearPartition]);
     const desc =
       clearTarget === 'sram'
         ? t.glove.logWriteClearSram
         : formatMessage(t.glove.logWriteClearEeprom, { partition: clearPartition });
-    await sendCommand(cmd, desc);
+    await sendCommand(cmd, payload, desc);
   };
 
   const handleCancelClear = (): void => {
@@ -720,8 +746,8 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
 
     const result = convertScoreToGloveCommands(score, annotations, target, rangeInput);
 
-    // 范围解析错误（parseRange 抛出异常时，result.warnings 含错误信息，noteCount=0）
-    if (result.warnings.length > 0 && result.noteCount === 0 && result.data === 'FF 00') {
+    // 范围解析错误（parseRange 抛出异常时，result.warnings 含错误信息，noteCount=0，data=''）
+    if (result.warnings.length > 0 && result.noteCount === 0 && result.data === '') {
       const msg = result.warnings[0];
       setWriteStatus(msg);
       addGloveLog(`[${ts()}] ${msg}`);
@@ -878,6 +904,16 @@ export const GloveControlPanel: React.FC<GloveControlPanelProps> = ({
             {!isConnected && (
               <div className="glove-hint" role="note">
                 {t.glove.logNotConnected}
+              </div>
+            )}
+            {isConnected && (
+              <div className="glove-hint" role="note">
+                <span
+                  className={`glove-status-pill ${slaveLinkAlive ? 'glove-status-pill--connected' : 'glove-status-pill--disconnected'}`}
+                  style={{ fontSize: 12, padding: '2px 10px' }}
+                >
+                  {slaveLinkAlive ? t.glove.slaveLinkAlive : t.glove.slaveLinkLost}
+                </span>
               </div>
             )}
           </section>

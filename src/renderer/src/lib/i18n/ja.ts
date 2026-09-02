@@ -303,6 +303,8 @@ export const ja = {
     logWriteEnd: 'End marker',
     logWriteComplete: 'Write complete! Sent {count} commands',
     logWriteTotalTime: 'Total time: {seconds}s',
+    logWriteResult: 'Write result: {bytes}/{expected} bytes, CRC {crc}, retries {retries}',
+    logWriteErrorCrc: 'CRC FAIL: written bytes != expected, please retry',
     logWriteCancelled: 'Write cancelled (sent {sent}/{total} commands)',
     logWriteError: 'Write failed: {error}',
     bpmSection: 'BPM setting',
@@ -352,5 +354,9 @@ export const ja = {
     importSuccess: 'Imported {notes} notes → {instructions} commands',
     sramCapacityWarning: 'SRAM supports max 32 instructions, current {count}. Excess will be discarded.',
     importStatus: 'Imported from score',
+    slaveLinkAlive: 'スレーブリンク正常',
+    slaveLinkLost: 'スレーブリンク切断',
+    slaveLinkRestored: 'スレーブリンク復旧',
+    syncComplete: '時刻同期完了: RTT {rtt}us, オフセット {offset}us',
   },
 } as const satisfies Record<string, Record<string, string>>;
